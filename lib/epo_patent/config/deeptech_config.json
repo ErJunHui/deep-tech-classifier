@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "mapping_file": "./config/deeptech_mapping.json",
+  "thresholds": {
+    "very_strong": 80,
+    "strong": 60,
+    "moderate": 40,
+    "not_deeptech": 0
+  },
+  "output": {
+    "include_analysis_sheet": true,
+    "include_score_in_details": true,
+    "include_domain_tags": true
+  },
+  "scoring": {
+    "use_max_score": true,
+    "apply_cross_domain_bonus": false,
+    "cross_domain_bonus_points": 10
+  }
+}

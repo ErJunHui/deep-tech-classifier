@@ -1,0 +1,365 @@
+"""Company patent search processing.
+
+Main orchestration for searching patents by company and fetching details.
+"""
+
+import re
+import time
+import logging
+from typing import Tuple, List, Dict, Any, Optional
+import xml.etree.ElementTree as ET
+import pandas as pd
+import requests
+
+from .patent_fetcher import fetch_patent_details
+from .name_normalizer import NameNormalizer
+from .search_validator import SearchValidator
+
+
+def clean_company_name_for_epo(name: str) -> str:
+    """
+    Clean company name for EPO API query.
+
+    Removes special characters, parentheses, brackets, and normalizes whitespace.
+    Converts to uppercase as EPO queries are case-insensitive.
+
+    Args:
+        name: Original company name
+
+    Returns:
+        Cleaned company name suitable for EPO search
+
+    Examples:
+        "ABASIA BIOLABS PTE. LTD." -> "ABASIA BIOLABS PTE. LTD."
+        "Company (Holdings) Ltd" -> "COMPANY  LTD"
+        "Tech-Corp & Co." -> "TECH-CORP & CO."
+    """
+    if pd.isna(name):
+        return ''
+
+    name = str(name).strip()
+
+    # Remove content in parentheses and brackets
+    name = re.sub(r'\s*\(.+\)\s*', ' ', name)
+    name = re.sub(r'\s*\[.+\]\s*', ' ', name)
+
+    # Keep only alphanumeric, spaces, periods, ampersands, and hyphens
+    name = re.sub(r'[^a-zA-Z0-9 .&-]+', ' ', name)
+
+    # Normalize whitespace
+    name = ' '.join(filter(None, name.split()))
+
+    # Convert to uppercase
+    return name.strip().upper()
+
+
+def search_and_process_company(
+    original_name: str,
+    cleaned_name: str,
+    epo_client,
+    namespaces: Dict[str, str],
+    country_code_map: Dict[str, str],
+    max_results: int,
+    search_delay_seconds: int,
+    detail_delay_seconds: int,
+    deeptech_classifier=None,
+    config: Optional[Dict[str, Any]] = None
+) -> Tuple[str, str, str, List[Dict[str, Any]]]:
+    """
+    Search for patents for a company and fetch details for found publications.
+
+    Args:
+        original_name: Original company name from input
+        cleaned_name: Cleaned company name for EPO query (used if config not provided)
+        epo_client: EPOClient instance
+        namespaces: XML namespace dictionary
+        country_code_map: Country code to name mapping
+        max_results: Maximum results to fetch per company
+        search_delay_seconds: Delay after search (not used internally, for caller)
+        detail_delay_seconds: Delay between detail requests
+        deeptech_classifier: Optional deep-tech classifier
+        config: Optional configuration dictionary (enables multi-variant search if provided)
+
+    Returns:
+        Tuple of:
+        - final_status: Overall status string for the company
+        - search_error_msg: Error message from search (or empty string)
+        - api_total_results_str: Total results reported by API ('N/A' if not found)
+        - company_patent_details: List of patent detail dictionaries (includes variant info)
+    """
+    logger = logging.getLogger(__name__)
+
+    logger.info("-" * 60)
+
+    # Generate search variants if config provided and feature enabled
+    variants_to_try = [cleaned_name]
+    variant_used = cleaned_name
+    variants_attempted = 0
+
+    if config and config.get('name_normalization', {}).get('enabled', False):
+        logger.info("Multi-variant search enabled")
+        normalizer = NameNormalizer(config)
+        primary, all_variants = normalizer.normalize(original_name)
+
+        if all_variants:
+            variants_to_try = all_variants
+            logger.info(f"Generated {len(variants_to_try)} search variants for '{original_name}'")
+            for i, v in enumerate(variants_to_try, 1):
+                logger.debug(f"  Variant {i}: {v}")
+        else:
+            logger.warning(f"No variants generated, using cleaned name: '{cleaned_name}'")
+    else:
+        logger.info(f"Using single variant (basic mode): '{cleaned_name}'")
+
+    # Initialize variables for search results
+    publication_components_to_process = []
+    search_status = "Search Not Attempted"
+    search_error_msg = ''
+    company_patent_details = []
+    api_total_results_str = 'N/A'
+
+    # Try each variant until we find results
+    for variant_index, search_variant in enumerate(variants_to_try):
+        if not search_variant:
+            logger.debug(f"Skipping empty variant {variant_index + 1}")
+            continue
+
+        variants_attempted = variant_index + 1
+        logger.info(f"Trying variant {variants_attempted}/{len(variants_to_try)}: '{search_variant}' (Original: '{original_name}')")
+
+        # Get CQL operator from config (default to 'pa' for backward compatibility)
+        search_operator = config.get('search', {}).get('cql_operator', 'pa') if config else 'pa'
+        cql_query = f'{search_operator}="{search_variant}"'
+        logger.info(f"Using CQL Query: {cql_query}")
+
+        # --- Perform Search ---
+        try:
+            search_xml_content = epo_client.search_patents(
+                cql_query,
+                range_begin=1,
+                range_end=max_results
+            )
+
+            logger.info(f"Search successful for '{search_variant}'")
+            search_status = "Search Success"
+            search_error_msg = ''  # Clear any errors from previous variants
+
+            if not search_xml_content:
+                logger.warning("Received empty search response (but status code was OK)")
+                search_status = "No Results - Empty XML"
+                search_error_msg = ''  # Clear errors even if empty response
+                # Try next variant
+                continue
+
+            # --- Parse Search Results ---
+            try:
+                search_root = ET.fromstring(search_xml_content)
+
+                # Get total result count from API
+                biblio_search = search_root.find('.//ops:biblio-search', namespaces)
+                if biblio_search is not None:
+                    api_total_results_str = biblio_search.get('total-result-count', 'N/A')
+                logger.info(f"Total results reported by API: {api_total_results_str}")
+
+                # Find publication references
+                publication_refs = search_root.findall('.//ops:publication-reference', namespaces)
+
+                if not publication_refs:
+                    if api_total_results_str == '0':
+                        logger.info(f"Query successful, 0 patent documents found for '{search_variant}'")
+                        search_status = "No Results Found"
+                        # Try next variant
+                        continue
+                    else:
+                        logger.warning(
+                            f"Could not find publication references in search XML, "
+                            f"though API total results = {api_total_results_str}"
+                        )
+                        search_status = "Search Success - No Refs Parsed"
+                        # Try next variant
+                        continue
+
+                # Found results! Record which variant worked and break
+                variant_used = search_variant
+                logger.info(
+                    f"Found {len(publication_refs)} publication references in search results "
+                    f"(up to max {max_results}) using variant '{variant_used}'"
+                )
+                logger.info("--- Extracting Publication Number Components ---")
+
+                # Extract publication components
+                for i, ref in enumerate(publication_refs):
+                    publication_number = "N/A"
+                    country = "N/A"
+                    doc_num = "N/A"
+                    kind = "N/A"
+
+                    try:
+                        doc_id_element = ref.find('.//exchange:document-id', namespaces)
+
+                        if doc_id_element is not None:
+                            country_elem = doc_id_element.find('exchange:country', namespaces)
+                            doc_num_elem = doc_id_element.find('exchange:doc-number', namespaces)
+                            kind_elem = doc_id_element.find('exchange:kind', namespaces)
+
+                            country = country_elem.text if country_elem is not None else "N/A"
+                            doc_num = doc_num_elem.text if doc_num_elem is not None else "N/A"
+                            kind = kind_elem.text if kind_elem is not None else ""
+
+                            if country != "N/A" and doc_num != "N/A":
+                                publication_number = f"{country}{doc_num}{kind}"
+                                publication_components_to_process.append(
+                                    (publication_number, country, doc_num, kind)
+                                )
+                                logger.debug(
+                                    f"  Extracted {i+1}: {publication_number} "
+                                    f"({country}/{doc_num}/{kind if kind else 'N/A'})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"  Skipped Ref {i+1}: Incomplete document ID "
+                                    f"(Country='{country}', DocNum='{doc_num}')"
+                                )
+                        else:
+                            logger.warning(f"  Skipped Ref {i+1}: Could not find document-id element")
+
+                    except Exception as parse_err:
+                        logger.error(f"    Error parsing one search reference: {parse_err}")
+
+                # Successfully found publications, break from variant loop
+                break
+
+            except ET.ParseError as e:
+                logger.error(f"Error parsing search XML response: {e}")
+                search_status = "Search Error - XML Parse"
+                search_error_msg = str(e)
+                # Try next variant
+                continue
+
+            except Exception as e_inner:
+                logger.error(f"An inner error occurred processing search results: {e_inner}", exc_info=True)
+                search_status = "Search Error - Inner Processing"
+                search_error_msg = str(e_inner)
+                # Try next variant
+                continue
+
+        except requests.exceptions.HTTPError as e:
+            # Handle 404 "no results" case
+            is_no_results_404 = False
+            status_code = e.response.status_code
+            error_text = e.response.text
+            reason = e.response.reason
+            search_error_msg = f"{status_code} {reason}"
+
+            if status_code == 404:
+                try:
+                    error_root = ET.fromstring(error_text)
+                    message = error_root.findtext('.//{http://ops.epo.org}message')
+                    if message and "no results found" in message.lower():
+                        logger.info(f"API reported 404: 'No results found' for '{search_variant}'")
+                        search_status = "No Results Found"
+                        is_no_results_404 = True
+                        api_total_results_str = '0'
+                        # Try next variant
+                        continue
+                except Exception:
+                    logger.warning(
+                        f"Received 404 Not Found for search. "
+                        f"Could not confidently determine if 'no results'. Treating as generic error."
+                    )
+
+            if not is_no_results_404:
+                logger.error(
+                    f"HTTP Error during initial search for '{search_variant}': {status_code} {reason}"
+                )
+                logger.error(f"  -> Response hint: {error_text[:200]}...")
+                search_status = f"Search Error - HTTP {status_code}"
+                # Try next variant
+                continue
+
+        except Exception as e:
+            logger.error(f"Unexpected error during search for '{search_variant}': {e}", exc_info=True)
+            search_status = "Search Error - Unexpected"
+            search_error_msg = str(e)
+            # Try next variant
+            continue
+
+    # After trying all variants, check if we found any results
+    if not publication_components_to_process:
+        # No results found from any variant
+        if search_status in ["No Results Found", "No Results - Empty XML"]:
+            final_status = "No Results Found"
+        elif "Search Error" in search_status:
+            final_status = search_status
+        elif search_status == "Search Success - No Refs Parsed":
+            final_status = search_status
+        else:
+            final_status = "No Results Found"
+
+        return final_status, search_error_msg, api_total_results_str, company_patent_details
+
+    # --- Fetch Details for Each Publication ---
+    detail_errors_occurred = False
+
+    logger.info(f"\n--- Processing {len(publication_components_to_process)} Found Publication(s) ---")
+
+    for pub_num_str, country_code, doc_number, kind_code in publication_components_to_process:
+        patent_detail_dict = fetch_patent_details(
+            pub_num_str,
+            country_code,
+            doc_number,
+            kind_code,
+            original_name,
+            epo_client,
+            namespaces,
+            country_code_map,
+            detail_delay_seconds,
+            deeptech_classifier
+        )
+
+        if patent_detail_dict:
+            # Add variant information to patent details
+            patent_detail_dict['search_variant_used'] = variant_used
+            patent_detail_dict['search_variants_attempted'] = variants_attempted
+
+            company_patent_details.append(patent_detail_dict)
+
+            # Check for errors in detail fetching
+            if ("Error" in patent_detail_dict.get("biblio_status", "") or
+                "Skipped" in patent_detail_dict.get("biblio_status", "")):
+                detail_errors_occurred = True
+        else:
+            logger.warning(f"fetch_patent_details returned None for {pub_num_str}")
+            detail_errors_occurred = True
+
+    # Validate search results if validation enabled
+    if config and config.get('search_validation', {}).get('enabled', False):
+        logger.info("Validating search results...")
+        validator = SearchValidator(config)
+        company_patent_details = validator.validate_patents(
+            original_name,
+            company_patent_details,
+            variant_used
+        )
+
+        # Log validation statistics
+        stats = validator.get_statistics(company_patent_details)
+        logger.info(
+            f"Validation complete: {stats['validated']}/{stats['total']} validated, "
+            f"{stats['uncertain']} uncertain, {stats['failed']} failed"
+        )
+    else:
+        # Add default validation fields if validation disabled
+        for patent in company_patent_details:
+            patent['validation_score'] = None
+            patent['validation_status'] = 'Not Validated'
+            patent['validation_best_match'] = ''
+            patent['validation_match_field'] = 'Unknown'
+
+    # Determine final status
+    if detail_errors_occurred:
+        final_status = "Found - Detail Issues"
+    else:
+        final_status = "Found - Success"
+
+    return final_status, search_error_msg, api_total_results_str, company_patent_details

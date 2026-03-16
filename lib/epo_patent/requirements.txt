@@ -1,0 +1,29 @@
+# EPO Patent Search - Python Dependencies
+
+# Core dependencies
+requests>=2.31.0
+pandas>=2.0.0
+python-dotenv>=1.0.0
+
+# EPO OPS API client
+python-epo-ops-client>=3.5.0
+
+# Excel file handling
+xlsxwriter>=3.1.0
+openpyxl>=3.1.0
+
+# Standard library (included with Python, listed for reference)
+# - os
+# - time
+# - xml.etree.ElementTree
+# - re
+# - traceback
+# - datetime
+# - collections
+# - logging
+# - hashlib
+# - json
+# - uuid
+# - pathlib
+# - functools
+# - random

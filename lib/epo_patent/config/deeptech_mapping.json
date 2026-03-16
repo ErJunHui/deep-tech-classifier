@@ -1,0 +1,250 @@
+{
+  "AI/ML": {
+    "description": "Artificial Intelligence and Machine Learning",
+    "subdomains": {
+      "Neural Networks": {
+        "main_groups": ["G06N 3"],
+        "confidence": "very_high"
+      },
+      "Machine Learning": {
+        "main_groups": ["G06N 20"],
+        "confidence": "very_high"
+      },
+      "Computer Vision": {
+        "main_groups": ["G06T 7", "G06V 10", "G06V 20"],
+        "confidence": "high"
+      },
+      "Speech Recognition": {
+        "main_groups": ["G10L 15"],
+        "confidence": "high"
+      },
+      "Pattern Recognition": {
+        "main_groups": ["G06K 9"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Quantum": {
+    "description": "Quantum Computing and Communications",
+    "subdomains": {
+      "Quantum Computing": {
+        "main_groups": ["G06N 10"],
+        "confidence": "very_high"
+      },
+      "Quantum Cryptography": {
+        "main_groups": ["H04L 9/08"],
+        "confidence": "very_high"
+      }
+    }
+  },
+  "Semiconductors": {
+    "description": "Semiconductor Devices and Manufacturing",
+    "subdomains": {
+      "Semiconductor Devices": {
+        "main_groups": ["H01L 29", "H01L 21"],
+        "confidence": "very_high"
+      },
+      "Memory Devices": {
+        "main_groups": ["H01L 27/108", "H01L 27/115"],
+        "confidence": "very_high"
+      },
+      "Photovoltaic Devices": {
+        "main_groups": ["H01L 31"],
+        "confidence": "high"
+      },
+      "LED Technology": {
+        "main_groups": ["H01L 33"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Biotech": {
+    "description": "Biotechnology",
+    "subdomains": {
+      "Genetic Engineering": {
+        "main_groups": ["C12N 15"],
+        "confidence": "very_high"
+      },
+      "Immunology": {
+        "main_groups": ["C07K 16"],
+        "confidence": "very_high"
+      },
+      "Cell Culture": {
+        "main_groups": ["C12N 5"],
+        "confidence": "high"
+      },
+      "Microorganisms": {
+        "main_groups": ["C12N 1"],
+        "confidence": "high"
+      },
+      "Enzymes": {
+        "main_groups": ["C12N 9"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Life Sciences": {
+    "description": "Life Sciences and Medical Technologies",
+    "subdomains": {
+      "Medical Preparations": {
+        "main_groups": ["A61K 39"],
+        "confidence": "very_high"
+      },
+      "Therapeutic Activity": {
+        "main_groups": ["A61P"],
+        "confidence": "high"
+      },
+      "DNA/RNA Analysis": {
+        "main_groups": ["C12Q 1/68"],
+        "confidence": "very_high"
+      },
+      "Drug Discovery": {
+        "main_groups": ["G01N 33/50"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Advanced Materials": {
+    "description": "Advanced Materials and Nanotechnology",
+    "subdomains": {
+      "Nanotechnology - Nanostructures": {
+        "main_groups": ["B82Y 5", "B82Y 10", "B82Y 15"],
+        "confidence": "very_high"
+      },
+      "Carbon Nanotubes": {
+        "main_groups": ["B82Y 30"],
+        "confidence": "very_high"
+      },
+      "Graphene": {
+        "main_groups": ["C01B 32/184"],
+        "confidence": "very_high"
+      },
+      "Nanomaterials Manufacturing": {
+        "main_groups": ["B82Y 40"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Chemistry": {
+    "description": "Advanced Chemistry and Materials Science",
+    "subdomains": {
+      "Heterocyclic Compounds": {
+        "main_groups": ["C07D"],
+        "confidence": "medium"
+      },
+      "Macromolecular Compounds": {
+        "main_groups": ["C08G"],
+        "confidence": "medium"
+      },
+      "Carbon Compounds": {
+        "main_groups": ["C01B 32"],
+        "confidence": "high"
+      },
+      "Silicon Compounds": {
+        "main_groups": ["C01B 33/12"],
+        "confidence": "high"
+      },
+      "Luminescent Materials": {
+        "main_groups": ["C09K 11"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Energy": {
+    "description": "Advanced Energy Technologies",
+    "subdomains": {
+      "Fuel Cells": {
+        "main_groups": ["H01M 8"],
+        "confidence": "very_high"
+      },
+      "Battery Technology": {
+        "main_groups": ["H01M 10", "H01M 4"],
+        "confidence": "very_high"
+      },
+      "Solar Energy": {
+        "main_groups": ["H02S"],
+        "confidence": "high"
+      },
+      "Energy Storage Systems": {
+        "main_groups": ["H01M 12"],
+        "confidence": "high"
+      },
+      "Renewable Energy": {
+        "main_groups": ["Y02E 10", "Y02E 60"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Robotics": {
+    "description": "Robotics and Automation",
+    "subdomains": {
+      "Industrial Robots": {
+        "main_groups": ["B25J 9"],
+        "confidence": "very_high"
+      },
+      "Robot Controllers": {
+        "main_groups": ["B25J 11"],
+        "confidence": "high"
+      },
+      "Autonomous Vehicles": {
+        "main_groups": ["B60W 30", "G05D 1"],
+        "confidence": "very_high"
+      },
+      "Drones": {
+        "main_groups": ["B64C 39"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Aerospace": {
+    "description": "Aerospace and Space Technologies",
+    "subdomains": {
+      "Spacecraft": {
+        "main_groups": ["B64G 1"],
+        "confidence": "very_high"
+      },
+      "Satellite Systems": {
+        "main_groups": ["B64G 1/10"],
+        "confidence": "very_high"
+      },
+      "Propulsion Systems": {
+        "main_groups": ["B64G 1/40"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Telecommunications": {
+    "description": "Advanced Telecommunications",
+    "subdomains": {
+      "5G Technology": {
+        "main_groups": ["H04W 4", "H04W 72"],
+        "confidence": "high"
+      },
+      "Optical Communications": {
+        "main_groups": ["H04B 10"],
+        "confidence": "high"
+      },
+      "Network Security": {
+        "main_groups": ["H04L 9"],
+        "confidence": "high"
+      }
+    }
+  },
+  "Advanced Manufacturing": {
+    "description": "Advanced Manufacturing Technologies",
+    "subdomains": {
+      "3D Printing": {
+        "main_groups": ["B29C 64", "B33Y"],
+        "confidence": "very_high"
+      },
+      "Laser Processing": {
+        "main_groups": ["B23K 26"],
+        "confidence": "high"
+      },
+      "Precision Manufacturing": {
+        "main_groups": ["B23P 15"],
+        "confidence": "medium"
+      }
+    }
+  }
+}

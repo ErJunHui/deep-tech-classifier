@@ -1,0 +1,44 @@
+{
+  "pipeline": {
+    "input_file": "companies.xlsx",
+    "company_name_column": "company_name",
+    "description_column": "description",
+    "domain_column": "domain",
+    "uen_column": "uen",
+    "checkpoint_interval": 10
+  },
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens_classifier": 2000,
+    "max_tokens_validator": 2000,
+    "temperature": 0.1,
+    "max_retries_on_parse_error": 2
+  },
+  "validation": {
+    "validator_threshold": 70,
+    "max_web_searches": 3,
+    "validator_enabled": true,
+    "override_min_confidence": 65,
+    "override_requires_delta": 20
+  },
+  "confidence": {
+    "epo_weight_max": 40,
+    "llm_weight_max": 50,
+    "validator_weight_max": 10,
+    "low_evidence_cap": 60
+  },
+  "epo": {
+    "epo_package_dir": "./lib/epo_patent",
+    "enabled": true
+  },
+  "enrichment": {
+    "enabled": true,
+    "max_searches": 2,
+    "max_tokens": 1000
+  },
+  "batch": {
+    "enabled": true,
+    "batch_poll_interval_s": 30
+  }
+}

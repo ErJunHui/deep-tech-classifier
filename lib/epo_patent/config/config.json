@@ -1,0 +1,71 @@
+{
+  "api": {
+    "max_results_per_company": 10,
+    "search_delay_seconds": 4,
+    "detail_delay_seconds": 2,
+    "timeout": 60,
+    "throttle_by_header": true
+  },
+  "retry": {
+    "max_attempts": 3,
+    "backoff_factor": 2.0,
+    "retry_status_codes": [429, 500, 502, 503, 504],
+    "max_delay_seconds": 60
+  },
+  "cache": {
+    "enabled": true,
+    "cache_dir": "./cache",
+    "expiry_days": 7,
+    "cache_search_results": true,
+    "cache_biblio_details": true
+  },
+  "checkpoint": {
+    "enabled": true,
+    "checkpoint_dir": "./checkpoints",
+    "checkpoint_interval": 5,
+    "auto_resume": true
+  },
+  "input": {
+    "excel_file": "deep_tech_dataset.xlsx",
+    "sheet_name": "Sheet1",
+    "column_name": "Coy Name"
+  },
+  "output": {
+    "filename_prefix": "epo_patent_search_results_",
+    "output_dir": "."
+  },
+  "logging": {
+    "level": "INFO",
+    "log_to_file": false,
+    "log_file_path": "./logs/epo_patent.log"
+  },
+  "deeptech": {
+    "enabled": true,
+    "config_file": "./config/deeptech_config.json"
+  },
+  "name_normalization": {
+    "enabled": true,
+    "remove_legal_suffixes": false,
+    "handle_non_ascii": true,
+    "generate_variants": true,
+    "max_variants": 5,
+    "special_cases": {
+      "Amperesand": {
+        "preserve_words": ["and"]
+      }
+    }
+  },
+  "search_validation": {
+    "enabled": true,
+    "validation_mode": "strict",
+    "min_similarity_score": 95,
+    "uncertain_threshold": 70,
+    "fuzzy_matching_algorithm": "token_sort_ratio",
+    "log_validation_details": true,
+    "exclude_failed_validations": false
+  },
+  "diagnostics": {
+    "log_normalization_variants": true,
+    "create_diagnostics_sheet": false
+  }
+}

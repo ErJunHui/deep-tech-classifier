@@ -1,0 +1,31 @@
+# Secrets
+.env
+
+# Nested .env files
+lib/epo_patent/.env
+lib/**/.env
+
+# Runtime outputs
+checkpoints/
+logs/
+*.xlsx
+*.csv
+
+# EPO runtime cache
+lib/epo_patent/cache/
+lib/epo_patent/checkpoints/
+
+# Log files (directory is ignored but be explicit)
+logs/*.log
+
+# Checkpoint data files (directory is ignored but be explicit)
+checkpoints/**/*.csv
+checkpoints/**/*.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+venv/
+.venv/
