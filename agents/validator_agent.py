@@ -417,6 +417,15 @@ def _extract_json_from_text(text: str) -> str:
         except (json.JSONDecodeError, ValueError):
             pass
 
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(text)
+        if repaired and repaired not in ("null", ""):
+            json.loads(repaired)  # validate the repair is parseable
+            return repaired
+    except Exception:
+        pass
+
     return ""
 
 
@@ -425,7 +434,18 @@ def _parse_json(raw_text: str) -> Dict[str, Any]:
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(text, return_objects=True)
+        if isinstance(repaired, dict):
+            return repaired
+    except Exception:
+        pass
+    return json.loads(text)  # re-raise original JSONDecodeError
 
 
 def _validate_validator_result(result: Dict[str, Any], agent1_classification: str) -> None:

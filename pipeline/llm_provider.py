@@ -136,6 +136,14 @@ def _extract_json(text: str) -> str:
             return match.group(0)
         except (json.JSONDecodeError, ValueError):
             pass
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(text)
+        if repaired and repaired not in ("null", ""):
+            json.loads(repaired)  # validate the repair is parseable
+            return repaired
+    except Exception:
+        pass
     return ""
 
 
@@ -334,13 +342,13 @@ class AnthropicProvider(LLMProvider):
 class GeminiProvider(LLMProvider):
     def __init__(self, api_key: str, model: str):
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            self._genai = genai
+            from google import genai as _genai
+            self._client = _genai.Client(api_key=api_key)
+            self._genai = _genai
         except ImportError:
             raise ImportError(
-                "google-generativeai package is required for Gemini provider. "
-                "Install with: pip install google-generativeai"
+                "google-genai package is required for Gemini provider. "
+                "Install with: pip install google-genai"
             )
         self._model = model
 
@@ -397,22 +405,47 @@ class GeminiProvider(LLMProvider):
         output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
         return input_tokens, output_tokens
 
+    def _call_with_backoff(self, fn, max_attempts: int = 3):
+        """Call fn(), retrying on 429/RESOURCE_EXHAUSTED using the server-supplied retry delay."""
+        for attempt in range(max_attempts):
+            try:
+                return fn()
+            except Exception as e:
+                msg = str(e)
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    m = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", msg)
+                    wait = min(int(m.group(1)) if m else 60, 120)
+                    if attempt < max_attempts - 1:
+                        logger.warning(
+                            f"Gemini rate limit (attempt {attempt + 1}/{max_attempts}). "
+                            f"Waiting {wait}s (server-specified)."
+                        )
+                        time.sleep(wait + 2)
+                        continue
+                    raise ProviderRateLimitError(f"Gemini rate limit after {max_attempts} attempts: {e}") from e
+                raise
+
     def complete(self, messages, system, max_tokens, temperature) -> LLMResponse:
         try:
-            from google.generativeai.types import GenerationConfig
-            model = self._genai.GenerativeModel(
-                model_name=self._model,
+            from google.genai import types
+            config = types.GenerateContentConfig(
                 system_instruction=self._system_text(system) or None,
-                generation_config=GenerationConfig(
-                    max_output_tokens=max_tokens,
-                    temperature=temperature,
-                ),
+                max_output_tokens=max_tokens,
+                temperature=temperature,
             )
             contents = self._to_gemini_contents(messages)
-            response = model.generate_content(contents)
+
+            def _call():
+                return self._client.models.generate_content(
+                    model=self._model, contents=contents, config=config
+                )
+
+            response = self._call_with_backoff(_call)
             text = response.text if hasattr(response, "text") else ""
             in_tok, out_tok = self._get_usage(response)
             return LLMResponse(text=text, input_tokens=in_tok, output_tokens=out_tok)
+        except (LLMProviderError, ProviderRateLimitError):
+            raise
         except Exception as e:
             raise LLMProviderError(f"Gemini API error: {e}") from e
 
@@ -427,19 +460,22 @@ class GeminiProvider(LLMProvider):
     ) -> Tuple[LLMResponse, List[str]]:
         """Gemini grounding with Google Search (equivalent to Anthropic's web_search tool)."""
         try:
-            from google.generativeai.types import GenerationConfig, Tool
-            google_search_tool = Tool(google_search_retrieval={})
-            model = self._genai.GenerativeModel(
-                model_name=self._model,
+            from google.genai import types
+            search_tool = types.Tool(google_search=types.GoogleSearch())
+            config = types.GenerateContentConfig(
                 system_instruction=self._system_text(system) or None,
-                tools=[google_search_tool],
-                generation_config=GenerationConfig(
-                    max_output_tokens=max_tokens,
-                    temperature=temperature,
-                ),
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                tools=[search_tool],
             )
             contents = self._to_gemini_contents(messages)
-            response = model.generate_content(contents)
+
+            def _call():
+                return self._client.models.generate_content(
+                    model=self._model, contents=contents, config=config
+                )
+
+            response = self._call_with_backoff(_call)
             text = response.text if hasattr(response, "text") else ""
             in_tok, out_tok = self._get_usage(response)
 
@@ -460,14 +496,14 @@ class GeminiProvider(LLMProvider):
                     {"role": "assistant", "content": text},
                     {"role": "user", "content": force_json_prompt},
                 ]
-                # Use complete() (no tools) for the follow-up
                 followup = self.complete(followup_msgs, system, max_tokens, temperature)
                 in_tok += followup.input_tokens
                 out_tok += followup.output_tokens
                 text = followup.text
 
-            return LLMResponse(text=text, input_tokens=in_tok, output_tokens=out_tok), sources
-        except LLMProviderError:
+            searches_count = 1 if sources else 0
+            return LLMResponse(text=text, input_tokens=in_tok, output_tokens=out_tok, searches=searches_count), sources
+        except (LLMProviderError, ProviderRateLimitError):
             raise
         except Exception as e:
             raise LLMProviderError(f"Gemini API error: {e}") from e
@@ -672,17 +708,26 @@ COST_RATES: Dict[str, Dict[str, float]] = {
         "cache_read":  0.30 / 1_000_000,
         "web_search":  10.00 / 1_000,
     },
+    "gemini-2.5-flash": {
+        "input":       0.15 / 1_000_000,   # $0.15/1M tokens
+        "output":      0.60 / 1_000_000,   # $0.60/1M tokens
+        "cache_write": 0.0,
+        "cache_read":  0.0,
+        "web_search":  35.00 / 1_000,      # $35/1,000 Google Search grounding requests
+    },
     "gemini-2.5-pro": {
         "input":       1.25 / 1_000_000,
         "output":      10.00 / 1_000_000,
         "cache_write": 0.0,
         "cache_read":  0.0,
+        "web_search":  35.00 / 1_000,
     },
     "gemini-2.0-flash": {
         "input":       0.10 / 1_000_000,
         "output":      0.40 / 1_000_000,
         "cache_write": 0.0,
         "cache_read":  0.0,
+        "web_search":  35.00 / 1_000,
     },
     "gpt-4o-mini": {
         "input":       0.15 / 1_000_000,

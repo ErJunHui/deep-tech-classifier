@@ -215,7 +215,7 @@ Final Confidence = EPO Score (0–40) + LLM Score (0–50) + Validator Bonus (0�
 ### Required Credentials (`.env`)
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...     # Claude Haiku API access
+ANTHROPIC_API_KEY=...     # Claude Haiku API access
 EPO_KEY=...                      # EPO OPS API consumer key
 EPO_SECRET=...                   # EPO OPS API consumer secret
 ```

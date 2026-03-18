@@ -8,10 +8,10 @@
     "checkpoint_interval": 10
   },
   "llm": {
-    "provider": "anthropic",
-    "model": "claude-haiku-4-5-20251001",
-    "max_tokens_classifier": 2000,
-    "max_tokens_validator": 2000,
+    "provider": "gemini",
+    "model": "gemini-2.5-flash",
+    "max_tokens_classifier": 5000,
+    "max_tokens_validator": 5000,
     "temperature": 0.1,
     "max_retries_on_parse_error": 2
   },

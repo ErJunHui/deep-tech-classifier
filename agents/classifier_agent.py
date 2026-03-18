@@ -6,6 +6,7 @@ Retries up to max_retries_on_parse_error times on JSON parse failures.
 """
 
 import json
+import re
 import logging
 import time
 from typing import Dict, Any, Optional
@@ -403,13 +404,31 @@ def build_batch_request(custom_id: str, company_data: dict) -> dict:
 
 
 def _parse_json(raw_text: str) -> Dict[str, Any]:
-    """Parse JSON, stripping any accidental markdown fences."""
+    """Parse JSON, stripping any accidental markdown fences or trailing text."""
     text = raw_text
     if text.startswith("```"):
         # Strip ```json ... ``` wrapper
         lines = text.split("\n")
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Extract first {...} block to handle trailing text after closing brace
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    try:
+        from json_repair import repair_json
+        repaired = repair_json(text, return_objects=True)
+        if isinstance(repaired, dict):
+            return repaired
+    except Exception:
+        pass
+    return json.loads(text)  # re-raise original JSONDecodeError for retry loop
 
 
 _VALID_CPC_VERDICTS = {"SUPPORTS_DEEP_TECH", "SUPPORTS_GENERAL_TECH", "INCONCLUSIVE", "NO_PATENTS"}
