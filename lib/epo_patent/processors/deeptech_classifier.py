@@ -167,6 +167,32 @@ class DeepTechClassifier:
         }
         base_score = max(base_score, section_scores.get(section, 0))
 
+        # Subclass-level overrides (4-char key: Section+Class+Subclass, e.g. 'A61F').
+        # Scores < 40 → epo_is_deeptech stays False.
+        subclass_overrides = {
+            # A61 splits: pharma/instruments = deep tech; physical devices = not deep tech
+            'A61K': 60,  # Pharmaceutical preparations
+            'A61P': 55,  # Therapeutic activity of compounds
+            'A61B': 55,  # Surgical/medical instruments, diagnostics
+            'A61N': 50,  # Electrotherapy, radiation therapy
+            'A61M': 45,  # Drug delivery devices — borderline, keep above threshold
+            'A61F': 20,  # Patches, bandages, splints, prosthetics — NOT deep tech
+            'A61G': 15,  # Patient transport, beds — NOT deep tech
+            'A61H': 15,  # Physical therapy apparatus — NOT deep tech
+            'A61J': 15,  # Medical containers — NOT deep tech
+            'A61L': 25,  # Sterilisation — weak signal
+            # B25 splits: robots = deep tech; hand tools = not deep tech
+            'B25J': 55,  # Manipulators / robots
+            'B25B': 20,  # Hand tools
+            'B25C': 20,  # Nailing tools
+            'B25D': 20,  # Percussive tools
+        }
+
+        subclass_key = section + cls + cpc_components.get('subclass', '')
+        if subclass_key in subclass_overrides:
+            base_score = max(base_score, subclass_overrides[subclass_key])
+            return base_score, []  # Skip class-level fallback entirely
+
         # Class-based heuristics
         high_tech_classes = {
             'G06': 50,  # Computing

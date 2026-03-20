@@ -49,8 +49,13 @@ tech domains. Cross-check:
 - Deep tech: G06N (AI/ML), C12N (biotech), B82Y/B82B (nano), H01L (semiconductors),
   G16H/G16B (health/bioinformatics), Y02 (emerging tech), A61B/A61K (medical/pharma),
   G01N (analytical instruments), H01M (electrochemistry/batteries)
-- General tech: G06Q (business methods), G06F alone (generic computing),
-  H04L alone (standard networking)
+- General tech (negative signals): G06Q (business methods), G06F alone (generic computing),
+  H04L alone (standard networking),
+  A61F (physical therapeutic devices — patches, bandages, splints),
+  A61G (patient transport), A61H (physical therapy), A61J (medical containers)
+- Critical: A61F ≠ A61K. A61F (physical devices) is a NEGATIVE deep tech signal.
+  A61K (pharmaceutical preparations) is a POSITIVE signal. If a company has only A61F
+  patents and no A61K/A61B/C12N, flag PATENTS_IN_GENERAL_TECH_DOMAIN.
 If patents exist but are in general tech domains, this is a strong signal against deep tech.
 
 **Check 4 — AI domain scrutiny (apply if company is AI-related)**
@@ -140,7 +145,18 @@ Escalate (ESCALATE_FOR_HUMAN_REVIEW) if ANY of the following are true:
 
 Escalating a case is a correct outcome when evidence is genuinely insufficient or
 contradictory. Do not force AUTO_APPROVE just to avoid escalation. Human reviewers
-handle escalated cases — your job is to escalate when you should, not to guess."""
+handle escalated cases — your job is to escalate when you should, not to guess.
+
+## OUTPUT STYLE REQUIREMENTS
+
+All text in web_evidence_summary, checks reasoning fields, escalation_reason, and steelman arguments must read as independent expert analytical judgment:
+
+- NEVER cite rule numbers or rule names (no "Rule 1", "Check 4", etc.) in output fields
+- NEVER reference internal guidelines, criteria documents, or instructions
+- NEVER use phrases like "my instructions", "as instructed", "I am instructed to"
+- Express assessments as observations about the company's actual evidence and technology
+- Frame steelman arguments as analyst reasoning: "one could argue...", "the case for X is..."
+- Write as a senior analyst conducting independent due diligence"""
 
 _FORCE_JSON_PROMPT = (
     "Based on your research above, output ONLY the JSON verdict:\n"
@@ -272,8 +288,14 @@ After searching, respond with ONLY this JSON:
 
 Applicable flags (include any that apply):
 "NO_PATENTS_BUT_INNOVATIVE", "PATENTS_IN_GENERAL_TECH_DOMAIN", "AMBIGUOUS_AI_DOMAIN",
-"WEAK_DESCRIPTION", "DEEP_TECH_INVESTOR_SIGNAL", "RESEARCH_INSTITUTION_LINK",
-"NEEDS_HUMAN_REVIEW", "DOMAIN_EXPERTISE_REQUIRED"
+"WEAK_DESCRIPTION", "RESEARCH_INSTITUTION_LINK", "NEEDS_HUMAN_REVIEW", "DOMAIN_EXPERTISE_REQUIRED"
+
+Flag definitions:
+"DEEP_TECH_INVESTOR_SIGNAL" — Use ONLY when an investor is explicitly a deep tech /
+science / hard tech fund (e.g., DCVC, Khosla Ventures, NRF CDE grants, A*STAR grants,
+university tech transfer). Do NOT apply for: consumer goods funds, general PE/VC, lifestyle/
+wellness funds, accelerators without deep tech mandate, or growth equity firms. Verify
+investor mandate before applying this flag.
 
 Use AUTO_APPROVE when the classification is clear and defensible.
 Use ESCALATE_FOR_HUMAN_REVIEW when evidence is contradictory, insufficient, or requires domain expertise."""
