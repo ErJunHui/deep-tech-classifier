@@ -29,6 +29,17 @@ class EPOResult:
     raw_status: str = "Not Run"
 
 
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_package_dir(epo_package_dir: str) -> str:
+    """Relative paths are relative to the project root, not the working directory."""
+    path = epo_package_dir or "lib/epo_patent"
+    if not os.path.isabs(path):
+        path = os.path.join(_PROJECT_ROOT, path)
+    return os.path.normpath(path)
+
+
 def _import_epo_package(epo_package_dir: str) -> bool:
     """Insert EPO package dir at front of sys.path if not already present."""
     if epo_package_dir not in sys.path:
@@ -110,7 +121,7 @@ def run_epo_lookup(
         company_name: Original company name.
         epo_key: EPO OPS API key (None → skip EPO).
         epo_secret: EPO OPS API secret (None → skip EPO).
-        epo_package_dir: Absolute path to the EPO package root.
+        epo_package_dir: Path to the EPO package root (relative = from project root).
         description: Company description (used for domain coherence check).
         domain: Company domain/sector (used for domain coherence check).
 
@@ -120,6 +131,11 @@ def run_epo_lookup(
     if not epo_key or not epo_secret:
         logger.warning("EPO credentials missing — skipping EPO lookup.")
         return EPOResult(raw_status="EPO Credentials Missing")
+
+    epo_package_dir = _resolve_package_dir(epo_package_dir)
+    if not os.path.isdir(epo_package_dir):
+        logger.error(f"EPO package directory not found: {epo_package_dir} (check epo.epo_package_dir)")
+        return EPOResult(raw_status="EPO Import Error")
 
     try:
         _import_epo_package(epo_package_dir)
@@ -168,7 +184,8 @@ def run_epo_lookup(
         return result
 
     except Exception as e:
-        logger.error(f"EPO lookup failed for '{company_name}': {type(e).__name__}")
+        logger.error(f"EPO lookup failed for '{company_name}': {type(e).__name__}: {e}")
+        logger.debug("EPO lookup traceback", exc_info=True)
         return EPOResult(raw_status="EPO Error")
 
 

@@ -11,7 +11,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -19,6 +18,8 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+from pipeline.json_utils import extract_json as _extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -115,38 +116,6 @@ class LLMProvider(ABC):
 _URL_PATTERN = re.compile(r'https?://[^\s\'"<>]+')
 
 
-def _extract_json(text: str) -> str:
-    """Try to extract a JSON object string from free text. Returns '' on failure."""
-    if not text or not text.strip():
-        return ""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.split("\n")
-        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        stripped = "\n".join(inner).strip()
-    try:
-        json.loads(stripped)
-        return stripped
-    except (json.JSONDecodeError, ValueError):
-        pass
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        try:
-            json.loads(match.group(0))
-            return match.group(0)
-        except (json.JSONDecodeError, ValueError):
-            pass
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(text)
-        if repaired and repaired not in ("null", ""):
-            json.loads(repaired)  # validate the repair is parseable
-            return repaired
-    except Exception:
-        pass
-    return ""
-
-
 # ---------------------------------------------------------------------------
 # Anthropic provider
 # ---------------------------------------------------------------------------
@@ -177,42 +146,52 @@ class AnthropicProvider(LLMProvider):
         """Expose the underlying Anthropic client (needed for batch API calls)."""
         return self._client
 
-    def complete(self, messages, system, max_tokens, temperature) -> LLMResponse:
+    def _create(self, **kwargs):
+        """messages.create with retries; raises LLMProviderError subclasses on failure."""
         _anthropic = self._anthropic
         max_retries = 3
         for attempt in range(max_retries):
+            last = attempt == max_retries - 1
             try:
-                response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system,
-                    messages=messages,
-                )
-                text = response.content[0].text if response.content else ""
-                return LLMResponse(
-                    text=text,
-                    input_tokens=getattr(response.usage, "input_tokens", 0),
-                    output_tokens=getattr(response.usage, "output_tokens", 0),
-                    cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0),
-                    cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0),
-                    stop_reason=response.stop_reason or "end_turn",
-                )
-            except _anthropic.RateLimitError:
+                return self._client.messages.create(model=self._model, **kwargs)
+            except _anthropic.RateLimitError as e:
+                if last:
+                    raise ProviderRateLimitError("Rate limit exceeded after retries") from e
                 wait = 60 * (attempt + 1)
                 logger.warning(f"Rate limit (attempt {attempt + 1}/{max_retries}). Waiting {wait}s.")
                 time.sleep(wait)
-                if attempt == max_retries - 1:
-                    raise ProviderRateLimitError("Rate limit exceeded after retries")
             except (_anthropic.APIConnectionError, _anthropic.InternalServerError) as e:
+                if last:
+                    raise ProviderConnectionError(str(e)) from e
                 wait = 5 * (attempt + 1)
                 logger.warning(f"API connection error (attempt {attempt + 1}/{max_retries}): {e}. Waiting {wait}s.")
                 time.sleep(wait)
-                if attempt == max_retries - 1:
-                    raise ProviderConnectionError(str(e))
             except _anthropic.APIError as e:
-                raise LLMProviderError(f"Anthropic API error: {e}")
-        raise LLMProviderError("complete() exhausted retries without raising")
+                raise LLMProviderError(f"Anthropic API error: {e}") from e
+        raise LLMProviderError("Anthropic request exhausted retries without raising")
+
+    @staticmethod
+    def _text_of(content) -> str:
+        # Web-search answers arrive as several text blocks (split around
+        # citations); join without a separator so JSON strings stay intact.
+        return "".join(b.text for b in content if getattr(b, "type", None) == "text")
+
+    def complete(self, messages, system, max_tokens, temperature) -> LLMResponse:
+        response = self._create(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=messages,
+        )
+        usage = response.usage
+        return LLMResponse(
+            text=self._text_of(response.content),
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+            cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+            stop_reason=response.stop_reason or "end_turn",
+        )
 
     def complete_with_search(
         self,
@@ -223,116 +202,94 @@ class AnthropicProvider(LLMProvider):
         max_searches: int,
         force_json_prompt: Optional[str] = None,
     ) -> Tuple[LLMResponse, List[str]]:
-        """Anthropic tool-use loop with server-side web_search."""
+        """
+        Run a conversation with Anthropic's server-side web_search tool.
+
+        The search runs on Anthropic's side: results come back in the same
+        response as server_tool_use / web_search_tool_result blocks, so there is
+        no client tool loop. max_searches is enforced by the API via max_uses.
+        """
         messages = list(messages)
-        searches_done = 0
+        search_tool = {**self._WEB_SEARCH_TOOL, "max_uses": max(int(max_searches), 1)}
         sources: List[str] = []
-        total_input = total_output = total_cache_read = total_cache_write = 0
+        totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "searches": 0}
 
         def _accumulate(usage):
-            nonlocal total_input, total_output, total_cache_read, total_cache_write
-            total_input += getattr(usage, "input_tokens", 0)
-            total_output += getattr(usage, "output_tokens", 0)
-            total_cache_read += getattr(usage, "cache_read_input_tokens", 0)
-            total_cache_write += getattr(usage, "cache_creation_input_tokens", 0)
+            totals["input"] += getattr(usage, "input_tokens", 0) or 0
+            totals["output"] += getattr(usage, "output_tokens", 0) or 0
+            totals["cache_read"] += getattr(usage, "cache_read_input_tokens", 0) or 0
+            totals["cache_write"] += getattr(usage, "cache_creation_input_tokens", 0) or 0
+            server_tools = getattr(usage, "server_tool_use", None)
+            totals["searches"] += getattr(server_tools, "web_search_requests", 0) or 0
 
-        def _collect_urls(content):
+        def _add_source(value: Optional[str]):
+            if value and value not in sources:
+                sources.append(value)
+
+        def _collect_sources(content):
             for block in content:
-                if block.type == "text":
+                block_type = getattr(block, "type", None)
+                if block_type == "server_tool_use":
+                    query = (getattr(block, "input", None) or {}).get("query")
+                    if query:
+                        _add_source(f"[search query] {query}")
+                elif block_type == "web_search_tool_result":
+                    results = getattr(block, "content", None)
+                    if isinstance(results, list):  # an error is a single object, not a list
+                        for item in results:
+                            _add_source(getattr(item, "url", None))
+                    else:
+                        logger.warning(
+                            f"Web search failed: {getattr(results, 'error_code', 'unknown error')}"
+                        )
+                elif block_type == "text":
                     for url in _URL_PATTERN.findall(block.text):
-                        clean = url.rstrip(".,;:)")
-                        if clean not in sources:
-                            sources.append(clean)
+                        _add_source(url.rstrip(".,;:)"))
 
-        def _make_response(text: str) -> LLMResponse:
-            return LLMResponse(
-                text=text,
-                input_tokens=total_input,
-                output_tokens=total_output,
-                cache_read_tokens=total_cache_read,
-                cache_write_tokens=total_cache_write,
-                searches=searches_done,
-            )
-
-        def _try_force_json(current_msgs: List, last_content) -> str:
-            """One extra call to coerce a JSON response, if force_json_prompt is set."""
-            if not force_json_prompt:
-                return ""
-            force_msgs = current_msgs + [
-                {"role": "assistant", "content": last_content},
-                {"role": "user", "content": force_json_prompt},
-            ]
-            fr = self._client.messages.create(
-                model=self._model,
+        # A long server-side turn can stop with pause_turn; send it back to continue.
+        max_continuations = 5
+        for _ in range(max_continuations + 1):
+            response = self._create(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 system=system,
-                messages=force_msgs,
-            )
-            _accumulate(fr.usage)
-            texts = [b for b in fr.content if b.type == "text"]
-            return _extract_json("\n".join(b.text for b in texts))
-
-        while True:
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=system,
-                tools=[self._WEB_SEARCH_TOOL],
+                tools=[search_tool],
                 messages=messages,
             )
             _accumulate(response.usage)
-            _collect_urls(response.content)
+            _collect_sources(response.content)
+            if response.stop_reason != "pause_turn":
+                break
+            messages = messages + [{"role": "assistant", "content": response.content}]
 
-            tool_uses = [b for b in response.content if b.type == "tool_use"]
+        final_text = _extract_json(self._text_of(response.content))
 
-            if not tool_uses or response.stop_reason == "end_turn":
-                text_blocks = [b for b in response.content if b.type == "text"]
-                all_text = "\n".join(b.text for b in text_blocks)
-                final_text = _extract_json(all_text)
-                if not final_text:
-                    final_text = _try_force_json(messages, response.content)
-                return _make_response(final_text), sources
+        if not final_text and force_json_prompt:
+            followup = list(messages)
+            if response.content:
+                followup.append({"role": "assistant", "content": response.content})
+                followup.append({"role": "user", "content": force_json_prompt})
+            else:
+                followup.append({"role": "user", "content": force_json_prompt})
+            forced = self._create(
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system,
+                tools=[search_tool],  # must stay declared: the history contains search blocks
+                messages=followup,
+            )
+            _accumulate(forced.usage)
+            _collect_sources(forced.content)
+            final_text = _extract_json(self._text_of(forced.content))
 
-            if searches_done >= max_searches:
-                logger.info(f"Reached max_searches={max_searches}, forcing final answer.")
-                messages.append({"role": "assistant", "content": response.content})
-                messages.append({"role": "user", "content": (
-                    f"You have performed {searches_done} searches (the maximum). "
-                    "Now provide your final answer based on what you found."
-                )})
-                final_response = self._client.messages.create(
-                    model=self._model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    system=system,
-                    messages=messages,
-                )
-                _accumulate(final_response.usage)
-                text_blocks = [b for b in final_response.content if b.type == "text"]
-                all_text = "\n".join(b.text for b in text_blocks)
-                final_text = _extract_json(all_text)
-                if not final_text:
-                    final_text = _try_force_json(messages, final_response.content)
-                return _make_response(final_text), sources
-
-            # Process tool uses and continue loop
-            tool_results = []
-            for tool_use in tool_uses:
-                searches_done += 1
-                query = tool_use.input.get("query", "") if hasattr(tool_use, "input") else ""
-                if query:
-                    sources.append(f"[search query] {query}")
-                logger.debug(f"Web search: {query!r}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tool_use.id,
-                    "content": [],  # server-side tool — content populated by API
-                })
-
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
+        return LLMResponse(
+            text=final_text,
+            input_tokens=totals["input"],
+            output_tokens=totals["output"],
+            cache_read_tokens=totals["cache_read"],
+            cache_write_tokens=totals["cache_write"],
+            searches=totals["searches"],
+        ), sources
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +360,9 @@ class GeminiProvider(LLMProvider):
         usage = getattr(response, "usage_metadata", None)
         input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
         output_tokens = getattr(usage, "candidates_token_count", 0) if usage else 0
-        return input_tokens, output_tokens
+        # Thinking tokens are billed as output but reported separately.
+        thinking_tokens = getattr(usage, "thoughts_token_count", 0) if usage else 0
+        return input_tokens or 0, (output_tokens or 0) + (thinking_tokens or 0)
 
     def _call_with_backoff(self, fn, max_attempts: int = 3):
         """Call fn(), retrying on 429/RESOURCE_EXHAUSTED using the server-supplied retry delay."""
@@ -685,20 +644,23 @@ class OpenAIProvider(LLMProvider):
 # Cost rates
 # ---------------------------------------------------------------------------
 
+# Anthropic Message Batches are billed at half the standard token rates.
+BATCH_DISCOUNT = 0.5
+
 # USD per token (not per million)
 COST_RATES: Dict[str, Dict[str, float]] = {
     "claude-haiku-4-5-20251001": {
-        "input":       0.80 / 1_000_000,
-        "output":      4.00 / 1_000_000,
-        "cache_write": 1.00 / 1_000_000,
-        "cache_read":  0.08 / 1_000_000,
+        "input":       1.00 / 1_000_000,
+        "output":      5.00 / 1_000_000,
+        "cache_write": 1.25 / 1_000_000,
+        "cache_read":  0.10 / 1_000_000,
         "web_search":  10.00 / 1_000,
     },
     "claude-haiku-4-5": {
-        "input":       0.80 / 1_000_000,
-        "output":      4.00 / 1_000_000,
-        "cache_write": 1.00 / 1_000_000,
-        "cache_read":  0.08 / 1_000_000,
+        "input":       1.00 / 1_000_000,
+        "output":      5.00 / 1_000_000,
+        "cache_write": 1.25 / 1_000_000,
+        "cache_read":  0.10 / 1_000_000,
         "web_search":  10.00 / 1_000,
     },
     "claude-sonnet-4-6": {
@@ -802,7 +764,7 @@ def build_provider(config: Dict[str, Any], api_keys: Optional[Dict[str, str]] = 
         return GeminiProvider(api_key=api_key, model=model)
 
     elif provider_name == "openai":
-        api_key = api_keys.get("openai_key") or os.getenv("OPENAI_API_KEY", "")
+        api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required for the openai provider.")
         return OpenAIProvider(api_key=api_key, model=model)

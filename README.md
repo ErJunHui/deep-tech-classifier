@@ -67,12 +67,24 @@ All settings live in `config.json`.
 | `validator_threshold` | int | `70` | Trigger validator when confidence < this |
 | `max_web_searches` | int | `3` | Max web searches per company in validator |
 | `validator_enabled` | bool | `true` | Enable/disable validator agent |
+| `override_min_confidence` | int | `65` | Validator may change the verdict only if its own confidence is at least this |
+
+### `confidence`
+
+The confidence score is the likelihood that the chosen verdict is correct. It starts from
+the classifier's confidence and is adjusted by patent evidence; if the validator runs, its
+post-research confidence takes over. See `PROJECT_OVERVIEW.md` §7 for the full rules.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `epo_adjust_max` | int | `15` | Max points patent evidence adds when it agrees with the verdict, or subtracts when it contradicts it |
+| `low_evidence_cap` | int | `60` | Confidence ceiling when a company has no description and no patents |
 
 ### `epo`
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `epo_package_dir` | string | `"./lib/epo_patent"` | Path to EPO patent package |
+| `epo_package_dir` | string | `"./lib/epo_patent"` | Path to EPO patent package (relative paths are resolved from the project folder) |
 | `enabled` | bool | `true` | Enable/disable EPO patent search |
 
 ### `batch`
@@ -146,7 +158,21 @@ If a run is interrupted, resume from the last checkpoint:
 python classify.py --resume
 ```
 
-The pipeline automatically saves progress every `pipeline.checkpoint_interval` companies.
+Progress is saved to `checkpoints/` after every company (enrichment/EPO data and
+final results alike), so a resumed run picks up at the next unfinished company.
+`pipeline.checkpoint_interval` only controls how often the Excel file is refreshed.
+
+- Resume with the **same input file**: checkpoints are keyed by row position, and
+  the run stops with an error if the rows no longer match.
+- Companies that ended in an error are retried on resume.
+- Pressing Ctrl-C writes the companies finished so far to the output Excel file.
+- Checkpoints from versions that wrote `llm_progress_*.csv` cannot be resumed.
+
+Run the resume tests (no API keys needed) with:
+
+```bash
+python -m unittest discover tests
+```
 
 ---
 

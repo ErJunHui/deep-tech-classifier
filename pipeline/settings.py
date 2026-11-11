@@ -29,10 +29,8 @@ def load_settings(config_path: str = None, env_path: str = None) -> Dict[str, An
     """
     base_dir = Path(__file__).parent.parent
 
-    if config_path is None:
-        config_path = base_dir / "config.json"
-    if env_path is None:
-        env_path = base_dir / ".env"
+    config_path = Path(config_path) if config_path else base_dir / "config.json"
+    env_path = Path(env_path) if env_path else base_dir / ".env"
 
     # Load .env
     if env_path.exists():
@@ -43,8 +41,6 @@ def load_settings(config_path: str = None, env_path: str = None) -> Dict[str, An
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     gemini_key = os.getenv("GEMINI_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
-    epo_key = os.getenv("EPO_KEY")
-    epo_secret = os.getenv("EPO_SECRET")
 
     # Load config.json first so we can check which provider is configured
     if not config_path.exists():
@@ -73,9 +69,3 @@ def load_settings(config_path: str = None, env_path: str = None) -> Dict[str, An
 
     return config
 
-
-# Cost rates for claude-haiku-4-5 (USD per token)
-HAIKU_INPUT_COST = 0.80 / 1_000_000
-HAIKU_OUTPUT_COST = 4.00 / 1_000_000
-HAIKU_CACHE_WRITE_COST = 1.00 / 1_000_000   # cache creation
-HAIKU_CACHE_READ_COST = 0.08 / 1_000_000    # cache read (5-min TTL)
