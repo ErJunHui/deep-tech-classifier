@@ -11,7 +11,6 @@ Sequential fallback (batch_enabled=false):
   Original per-company flow unchanged.
 """
 
-import csv
 import json
 import logging
 import os
@@ -20,7 +19,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional
 
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.confidence import compute_final_confidence
@@ -33,6 +32,10 @@ from data.writer import write_incremental
 logger = logging.getLogger(__name__)
 
 RUN_STATE_FILE = "checkpoints/run_state.json"
+
+
+class ResumeError(Exception):
+    """Checkpoint data does not match the input file being resumed."""
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +127,16 @@ def _run_pipeline_batch(
     # ------------------------------------------------------------------
     # Phase 1: Data gathering (enrichment + EPO)
     # ------------------------------------------------------------------
-    if run_state["batch_phase"] == "pending" or not Path(gathered_path).exists():
-        logger.info("=== Phase 1: Data Gathering (enrichment + EPO) ===")
+    company_data_list = _load_jsonl(gathered_path) if Path(gathered_path).exists() else []
+    _check_alignment(
+        {i: cd.get("company_name") for i, cd in enumerate(company_data_list)},
+        companies, gathered_path,
+    )
+    if len(company_data_list) < len(companies):
+        logger.info(
+            f"=== Phase 1: Data Gathering (enrichment + EPO) — "
+            f"{len(company_data_list)}/{len(companies)} already gathered ==="
+        )
         company_data_list = _phase1_gather(
             companies=companies,
             config=config,
@@ -135,23 +146,19 @@ def _run_pipeline_batch(
             epo_secret=epo_secret,
             enrichment_enabled=enrichment_enabled,
             provider=provider,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
+            gathered=company_data_list,
+            gathered_path=gathered_path,
         )
-        _save_jsonl(company_data_list, gathered_path)
         logger.info(f"Phase 1 complete. Gathered {len(company_data_list)} companies → {gathered_path}")
     else:
-        logger.info(f"Phase 1: Loading from {gathered_path}")
-        company_data_list = _load_jsonl(gathered_path)
-        logger.info(f"Phase 1: Loaded {len(company_data_list)} companies.")
+        logger.info(f"Phase 1: Loaded {len(company_data_list)} companies from {gathered_path}")
 
     # ------------------------------------------------------------------
     # Phase 2: Agent 1 batch submission + polling
     # ------------------------------------------------------------------
     batch_phase = run_state.get("batch_phase", "pending")
 
-    if batch_phase in ("pending", "submitted") and not _batch_results_ready(run_state, batch_results_path):
+    if not _batch_results_ready(run_state, batch_results_path):
         if batch_phase == "submitted" and run_state.get("batch_id"):
             logger.info(f"=== Phase 2: Resuming poll for batch {run_state['batch_id']} ===")
             batch_id = run_state["batch_id"]
@@ -216,21 +223,15 @@ def _run_pipeline_batch(
     logger.info("=== Phase 4: Agent 2 validation + checkpointing ===")
 
     # Load any existing Phase 4 checkpoint (resume support within Phase 4)
-    already_done: Set[str] = set()
-    results: List[Dict[str, Any]] = []
-    if run_state.get("batch_phase") in ("results_saved", "complete"):
-        llm_ckpt_path = _llm_checkpoint_path(run_id)
-        if Path(llm_ckpt_path).exists():
-            already_done, results = _load_llm_checkpoint(run_id)
-            logger.info(f"Phase 4 resume: {len(already_done)} companies already checkpointed.")
-
-    done_map: Dict[str, Dict] = {r["company_name"]: r for r in results}
+    done = _load_llm_checkpoint(run_id, companies)
+    if done:
+        logger.info(f"Phase 4 resume: {len(done)} companies already checkpointed.")
     total = len(company_data_list)
 
     for i, cd in enumerate(company_data_list):
         name = cd["company_name"]
 
-        if name in already_done:
+        if i in done:
             logger.info(f"[{i+1}/{total}] Skipping (done): {name}")
             continue
 
@@ -255,18 +256,17 @@ def _run_pipeline_batch(
         result["processing_time_s"] = round(t_end - t_start, 2)
         result["company_name"] = name
 
-        results.append(result)
-        done_map[name] = result
-        _append_llm_checkpoint(run_id, result)
+        done[i] = result
+        _append_llm_checkpoint(run_id, i, result)
 
         if (i + 1) % checkpoint_interval == 0 or (i + 1) == total:
-            processed_companies = [c for c in companies if c["company_name"] in done_map]
-            write_incremental(output_path, processed_companies, [done_map[c["company_name"]] for c in processed_companies])
+            _write_excel_checkpoint(output_path, companies, done)
             logger.info(f"Excel checkpoint written at {i+1}/{total}")
 
     run_state["batch_phase"] = "complete"
     _save_run_state(run_state)
 
+    results = [done[i] for i in range(total)]
     _log_run_summary(results)
     return results
 
@@ -277,13 +277,21 @@ def _run_pipeline_batch(
 
 def _phase1_gather(
     companies, config, epo_enabled, epo_package_dir, epo_key, epo_secret,
-    enrichment_enabled, provider, model, max_tokens, temperature,
+    enrichment_enabled, provider, gathered, gathered_path,
 ) -> List[Dict[str, Any]]:
-    """Run Agent 0 + EPO for all companies. Returns list of company_data dicts."""
+    """
+    Run Agent 0 + EPO for every company not yet in `gathered`.
+
+    Each company is appended to gathered_path as soon as it is done, so an
+    interrupted run resumes from the next company instead of starting over.
+    Returns the full list of company_data dicts (existing + new).
+    """
     total = len(companies)
-    result = []
+    result = list(gathered)
 
     for i, company in enumerate(companies):
+        if i < len(result):
+            continue
         name = company["company_name"]
         uen = company.get("uen", "")
         domain = company.get("domain", "")
@@ -323,7 +331,7 @@ def _phase1_gather(
         else:
             epo_result = EPOResult(raw_status="EPO Disabled")
 
-        result.append({
+        record = {
             "company_name": name,
             "uen": uen,
             "domain": domain,
@@ -339,7 +347,11 @@ def _phase1_gather(
             "enrichment_input_tokens": enrich_result.get("enrichment_input_tokens", 0),
             "enrichment_output_tokens": enrich_result.get("enrichment_output_tokens", 0),
             "epo": asdict(epo_result),
-        })
+        }
+        # Round-trip through JSON so fresh and resumed runs see identical data.
+        record = json.loads(json.dumps(record, default=str))
+        _append_jsonl(record, gathered_path)
+        result.append(record)
 
     return result
 
@@ -636,13 +648,12 @@ def _run_pipeline_sequential(
     provider = build_provider(config)
     _rates = get_cost_rates(provider.model_name)
 
-    already_done: Set[str] = set()
-    results: List[Dict[str, Any]] = []
     run_id = resume_run_id or _generate_run_id()
+    done: Dict[int, Dict[str, Any]] = {}
 
     if resume_run_id:
-        already_done, results = _load_llm_checkpoint(resume_run_id)
-        logger.info(f"Resuming sequential run {resume_run_id}: {len(already_done)} done.")
+        done = _load_llm_checkpoint(resume_run_id, companies)
+        logger.info(f"Resuming sequential run {resume_run_id}: {len(done)} done.")
     else:
         run_state = {
             "run_id": run_id,
@@ -653,13 +664,12 @@ def _run_pipeline_sequential(
         }
         _save_run_state(run_state)
 
-    done_map: Dict[str, Dict] = {r["company_name"]: r for r in results}
     total = len(companies)
 
     for i, company in enumerate(companies):
         name = company["company_name"]
 
-        if name in already_done:
+        if i in done:
             logger.info(f"[{i+1}/{total}] Skipping (already done): {name}")
             continue
 
@@ -680,24 +690,23 @@ def _run_pipeline_sequential(
                 rates=_rates,
                 enrichment_enabled=enrichment_enabled,
             )
+            result["processing_errors"] = ""
         except Exception as exc:
             logger.error(f"Unhandled error processing '{name}': {exc}", exc_info=True)
             result = _error_result(name)
 
         t_end = time.time()
         result["processing_time_s"] = round(t_end - t_start, 2)
-        result["processing_errors"] = ""
         result["company_name"] = name
 
-        results.append(result)
-        done_map[name] = result
-        _append_llm_checkpoint(run_id, result)
+        done[i] = result
+        _append_llm_checkpoint(run_id, i, result)
 
         if (i + 1) % checkpoint_interval == 0 or (i + 1) == total:
-            completed = [done_map.get(c["company_name"], _error_result(c["company_name"])) for c in companies if c["company_name"] in done_map]
-            write_incremental(output_path, _align_companies(companies, done_map), completed)
+            _write_excel_checkpoint(output_path, companies, done)
             logger.info(f"Checkpoint written at company {i+1}/{total}")
 
+    results = [done[i] for i in range(total)]
     _log_run_summary(results)
     return results
 
@@ -916,14 +925,54 @@ def _save_jsonl(data: List[Any], path: str) -> None:
             f.write(json.dumps(item, default=str) + "\n")
 
 
+def _append_jsonl(item: Any, path: str) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(item, default=str) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
 def _load_jsonl(path: str) -> List[Dict]:
-    results = []
+    """Load a JSONL file. A torn final line (crash mid-write) is dropped and removed."""
     with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                results.append(json.loads(line))
+        lines = [ln for ln in (raw.strip() for raw in f) if ln]
+    results = []
+    for n, line in enumerate(lines):
+        try:
+            results.append(json.loads(line))
+        except json.JSONDecodeError:
+            if n != len(lines) - 1:
+                raise
+            logger.warning(f"Dropping incomplete last line of {path} (interrupted write).")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("".join(ln + "\n" for ln in lines[:-1]))
     return results
+
+
+def _check_alignment(
+    names_by_index: Dict[int, Any],
+    companies: List[Dict[str, Any]],
+    source: str,
+) -> None:
+    """Checkpoints are keyed by row position; refuse to resume against a different input."""
+    for idx, name in names_by_index.items():
+        if idx >= len(companies) or companies[idx]["company_name"] != name:
+            expected = companies[idx]["company_name"] if idx < len(companies) else "<no such row>"
+            raise ResumeError(
+                f"{source} does not match the input file: row {idx + 1} is {expected!r} "
+                f"but the checkpoint has {name!r}. Resume with the original input file, "
+                "or start a fresh run without --resume."
+            )
+
+
+def _write_excel_checkpoint(
+    output_path: str,
+    companies: List[Dict[str, Any]],
+    done: Dict[int, Dict[str, Any]],
+) -> None:
+    indices = [i for i in range(len(companies)) if i in done]
+    write_incremental(output_path, [companies[i] for i in indices], [done[i] for i in indices])
 
 
 def _parse_json(raw_text: str) -> Dict[str, Any]:
@@ -962,54 +1011,56 @@ def load_run_state() -> Optional[Dict[str, Any]]:
 
 
 def _llm_checkpoint_path(run_id: str) -> str:
-    return f"checkpoints/llm/llm_progress_{run_id}.csv"
+    return f"checkpoints/llm/llm_progress_{run_id}.jsonl"
 
 
-def _append_llm_checkpoint(run_id: str, result: Dict[str, Any]) -> None:
-    path = _llm_checkpoint_path(run_id)
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-    row = {k: v for k, v in result.items()}
-    for list_key in ("cpc_codes", "sources_checked", "key_signals", "validator_flags",
-                     "classifier_flags", "flags", "criteria", "cpc_analysis", "self_audit", "checks"):
-        val = row.get(list_key, "")
-        if isinstance(val, (list, dict)):
-            row[list_key] = json.dumps(val)
-
-    write_header = not Path(path).exists()
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        fieldnames = list(row.keys())
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
-        writer.writerow(row)
+def _append_llm_checkpoint(run_id: str, index: int, result: Dict[str, Any]) -> None:
+    """Append one finished company, keyed by its row position in the input."""
+    _append_jsonl({"index": index, "result": result}, _llm_checkpoint_path(run_id))
 
 
-def _load_llm_checkpoint(run_id: str):
+def _load_llm_checkpoint(
+    run_id: str,
+    companies: List[Dict[str, Any]],
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Load finished results as {row position: result}.
+
+    Rows that ended in an error are left out so that a resume retries them.
+    """
     path = _llm_checkpoint_path(run_id)
     if not Path(path).exists():
-        logger.warning(f"LLM checkpoint not found: {path}")
-        return set(), []
+        if Path(path).with_suffix(".csv").exists():
+            logger.warning(
+                f"Found an old-format CSV checkpoint for run {run_id}; it cannot be "
+                "resumed reliably and is ignored."
+            )
+        else:
+            logger.warning(f"LLM checkpoint not found: {path}")
+        return {}
 
-    results = []
-    done_names: Set[str] = set()
-    with open(path, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            for json_key in ("cpc_codes", "sources_checked", "key_signals", "validator_flags",
-                             "classifier_flags", "flags", "criteria", "cpc_analysis", "self_audit", "checks"):
-                raw = row.get(json_key, "")
-                if raw:
-                    try:
-                        row[json_key] = json.loads(raw)
-                    except json.JSONDecodeError:
-                        pass
-            name = row.get("company_name", "")
-            if name:
-                done_names.add(name)
-            results.append(dict(row))
+    done: Dict[int, Dict[str, Any]] = {}
+    for entry in _load_jsonl(path):
+        done[int(entry["index"])] = entry["result"]  # last write wins
 
-    return done_names, results
+    _check_alignment({i: r.get("company_name") for i, r in done.items()}, companies, path)
+
+    errored = [i for i, r in done.items() if r.get("classification") == "error"]
+    for i in errored:
+        del done[i]
+    if errored:
+        logger.info(f"{len(errored)} checkpointed companies ended in an error and will be retried.")
+    return done
+
+
+def load_partial_results(companies: List[Dict[str, Any]]):
+    """Return (companies, results) finished so far in the current run, in input order."""
+    state = load_run_state()
+    if not state:
+        return [], []
+    done = _load_llm_checkpoint(state["run_id"], companies)
+    indices = sorted(done)
+    return [companies[i] for i in indices], [done[i] for i in indices]
 
 
 def _log_run_summary(results: List[Dict[str, Any]]) -> None:
@@ -1088,10 +1139,3 @@ def _error_result(company_name: str) -> Dict[str, Any]:
         "enrichment_output_tokens": 0,
         "total_cost_usd": 0.0,
     }
-
-
-def _align_companies(
-    companies: List[Dict[str, Any]],
-    done_map: Dict[str, Dict],
-) -> List[Dict[str, Any]]:
-    return [c for c in companies if c["company_name"] in done_map]

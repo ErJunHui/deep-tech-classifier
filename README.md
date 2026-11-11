@@ -146,7 +146,21 @@ If a run is interrupted, resume from the last checkpoint:
 python classify.py --resume
 ```
 
-The pipeline automatically saves progress every `pipeline.checkpoint_interval` companies.
+Progress is saved to `checkpoints/` after every company (enrichment/EPO data and
+final results alike), so a resumed run picks up at the next unfinished company.
+`pipeline.checkpoint_interval` only controls how often the Excel file is refreshed.
+
+- Resume with the **same input file**: checkpoints are keyed by row position, and
+  the run stops with an error if the rows no longer match.
+- Companies that ended in an error are retried on resume.
+- Pressing Ctrl-C writes the companies finished so far to the output Excel file.
+- Checkpoints from versions that wrote `llm_progress_*.csv` cannot be resumed.
+
+Run the resume tests (no API keys needed) with:
+
+```bash
+python -m unittest discover tests
+```
 
 ---
 

@@ -7,7 +7,6 @@ Entry point: python classify.py --input companies.xlsx [--resume]
 import argparse
 import logging
 import os
-import signal
 import sys
 import time
 from datetime import datetime
@@ -19,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.settings import load_settings, ConfigError
 from data.reader import read_companies
-from data.writer import make_output_path, write_results
-from pipeline.orchestrator import run_pipeline, load_run_state
+from data.writer import make_output_path, write_results, write_incremental
+from pipeline.orchestrator import run_pipeline, load_run_state, load_partial_results, ResumeError
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -153,28 +152,28 @@ def main():
     start_time = datetime.now()
     t_start = time.time()
 
-    # Graceful shutdown handler
-    results_so_far: list = []
-
-    def _handle_sigint(signum, frame):
-        logger.warning("Interrupted! Writing partial results...")
-        if results_so_far:
-            done = [c for c in companies if c["company_name"] in {r.get("company_name") for r in results_so_far}]
-            from data.writer import write_incremental
-            write_incremental(output_path, done, results_so_far)
-            logger.info(f"Partial results saved to {output_path}")
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, _handle_sigint)
-
-    # Run pipeline
-    results = run_pipeline(
-        companies=companies,
-        config=config,
-        output_path=output_path,
-        resume_run_id=resume_run_id,
-    )
-    results_so_far.extend(results)
+    # Every finished company is checkpointed as it completes, so on Ctrl-C we
+    # only need to export what is already on disk.
+    try:
+        results = run_pipeline(
+            companies=companies,
+            config=config,
+            output_path=output_path,
+            resume_run_id=resume_run_id,
+        )
+    except ResumeError as e:
+        print(f"[FATAL] Cannot resume: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.warning("Interrupted. Progress is checkpointed — rerun with --resume to continue.")
+        try:
+            done_companies, done_results = load_partial_results(companies)
+            if done_results:
+                write_incremental(output_path, done_companies, done_results)
+                logger.info(f"Partial results ({len(done_results)} companies) saved to {output_path}")
+        except Exception as e:
+            logger.error(f"Could not write partial results: {e}")
+        sys.exit(130)
 
     t_end = time.time()
     end_time = datetime.now()
@@ -182,7 +181,7 @@ def main():
 
     # Final write with summary
     run_stats = {
-        "run_id": resume_run_id or "new",
+        "run_id": (load_run_state() or {}).get("run_id", "unknown"),
         "start_time": start_time.isoformat(),
         "end_time": end_time.isoformat(),
         "total_runtime_s": total_runtime,
