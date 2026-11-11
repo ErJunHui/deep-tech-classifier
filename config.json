@@ -19,13 +19,10 @@
     "validator_threshold": 70,
     "max_web_searches": 3,
     "validator_enabled": true,
-    "override_min_confidence": 65,
-    "override_requires_delta": 20
+    "override_min_confidence": 65
   },
   "confidence": {
-    "epo_weight_max": 40,
-    "llm_weight_max": 50,
-    "validator_weight_max": 10,
+    "epo_adjust_max": 15,
     "low_evidence_cap": 60
   },
   "epo": {

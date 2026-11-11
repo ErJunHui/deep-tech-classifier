@@ -67,9 +67,9 @@ Input row
     │
     ▼
 [Confidence Scoring]
-    • EPO signal:      0–40 pts  (patent count + deep tech level multiplier)
-    • LLM signal:      0–50 pts  (Agent 1 confidence scaled to weight)
-    • Validator bonus:  0–10 pts (added if Agent 2 runs)
+    • Start from Agent 1's confidence (0–100)
+    • Patent evidence: up to +15 if it agrees with the verdict,
+                       up to −15 if it contradicts it
     • Cap at 60 if no description AND no patents
     │
     ▼
@@ -81,6 +81,7 @@ Input row
     • Verdicts: AUTO_APPROVE (confirm or override) or
                 ESCALATE_FOR_HUMAN_REVIEW
     • Overrides accepted only if Agent 2 confidence ≥ 65
+    • Agent 2's confidence replaces the score (it can lower it)
     │
     ▼
 Output row → Excel workbook
@@ -104,7 +105,7 @@ deep_tech_classifier/
 ├── pipeline/
 │   ├── settings.py                # Loads config.json + .env
 │   ├── epo_bridge.py              # Adapter to EPO package → EPOResult
-│   ├── confidence.py              # EPO + LLM + validator score combination
+│   ├── confidence.py              # Confidence scoring + validator verdict resolution
 │   ├── llm_provider.py            # Anthropic API wrapper (batch + sequential)
 │   └── orchestrator.py            # Per-company loop + checkpointing
 │
@@ -136,7 +137,7 @@ deep_tech_classifier/
 | **Batch processing** | Uses Anthropic Message Batches API for cost-efficient parallel classification of large lists |
 | **Resume support** | Interrupted runs can be resumed with `--resume`; no work is lost |
 | **Checkpointing** | Progress saved every 10 companies; incremental Excel output written at each checkpoint |
-| **Confidence scoring** | Composite score from three independent signals (EPO, LLM, web validation) |
+| **Confidence scoring** | Confidence in the chosen verdict: LLM confidence adjusted by patent evidence, revised by web validation |
 | **Web enrichment** | Automatically fills missing company descriptions via live web search before classification |
 | **Adversarial validation** | Low-confidence results are challenged by a second AI agent using live web searches |
 | **Cost tracking** | Token counts and USD cost tracked per company and reported in output |
@@ -184,18 +185,30 @@ Explains all colour codes, confidence tiers, verdict labels, and column definiti
 
 ## 7. Confidence Scoring
 
-Final confidence is a composite of three independent signals, capped at 100:
+The confidence score always means the same thing: how likely the **chosen verdict** is to be correct (0–100).
+
+**Before validation**
 
 ```
-Final Confidence = EPO Score (0–40) + LLM Score (0–50) + Validator Bonus (0–10)
-                   └── capped at 60 if no description AND no patents
+Confidence = Agent 1 confidence  ±  patent adjustment (0–15)
+             └── capped at 60 if no description AND no patents
 ```
 
-| Signal | Max Points | How it is calculated |
-|--------|-----------|----------------------|
-| **EPO Score** | 40 | Patent count contribution (up to 20 pts) + deep tech level multiplier × 40. Level multipliers: Very Strong 1.0, Strong 0.8, Moderate 0.55, Not Deep-tech 0.25 |
-| **LLM Score** | 50 | Agent 1 confidence (0–100) scaled to 0–50 |
-| **Validator Bonus** | 10 | Added by Agent 2 when it confirms or upgrades a borderline classification |
+| Signal | Range | How it is calculated |
+|--------|-------|----------------------|
+| **LLM score** (`signal_score_llm`) | 0–100 | Agent 1's own confidence in its verdict |
+| **Patent adjustment** (`signal_score_epo`) | −15 to +15 | Strength of the EPO deep tech signal × 15. Added when the verdict is deep tech, subtracted when it is general tech. Strength = level (Very Strong 1.0, Strong 0.8, Moderate 0.55, Not Deep-tech 0) × a patent-count factor that grows from 0.6 at one patent to 1.0 at five or more. No patents, or "Not Deep-tech" patents, give 0. |
+
+If this score is below `validation.validator_threshold` (70), Agent 2 runs.
+
+**After validation** (`signal_score_validator` records the change)
+
+| Agent 2 outcome | Verdict | Confidence |
+|-----------------|---------|------------|
+| Confirms | unchanged | Agent 2's confidence (may be higher or lower) |
+| Overrides with confidence ≥ 65 | Agent 2's verdict | Agent 2's confidence |
+| Overrides with confidence < 65 (blocked, "Contested") | unchanged | at most 100 − Agent 2's confidence |
+| Escalates / validation failed | unchanged | can only go down |
 
 **Confidence tiers (for management readability):**
 
@@ -227,7 +240,9 @@ EPO_SECRET=...                   # EPO OPS API consumer secret
 | `llm.model` | `claude-haiku-4-5-20251001` | AI model used for all three agents |
 | `validation.validator_threshold` | `70` | Confidence below this triggers Agent 2 |
 | `validation.max_web_searches` | `3` | Max web searches per Agent 2 call |
-| `validation.override_min_confidence` | `65` | Agent 2 override accepted only above this |
+| `validation.override_min_confidence` | `65` | Agent 2 override accepted only at or above this |
+| `confidence.epo_adjust_max` | `15` | Max points patents add to (or take from) confidence |
+| `confidence.low_evidence_cap` | `60` | Confidence ceiling when there is no description and no patents |
 | `enrichment.max_searches` | `2` | Max web searches per Agent 0 call |
 | `pipeline.checkpoint_interval` | `10` | Save progress every N companies |
 | `batch.enabled` | `true` | Use Anthropic Batch API (50% cost saving) |

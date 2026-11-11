@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
-from pipeline.confidence import compute_final_confidence
+from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.llm_provider import build_provider, get_cost_rates
 from agents.classifier_agent import classify as agent1_classify, build_batch_request
 from agents.validator_agent import validate as agent2_validate
@@ -474,20 +474,20 @@ def _phase4_process_one(
     has_description = bool(
         resolved_description and str(resolved_description).strip() not in ("nan", "None", "")
     )
+    classification = agent1.get("classification", "error")
     scores = compute_final_confidence(
+        classification=classification,
         patent_count=epo.patent_count,
         epo_deeptech_level=epo.epo_deeptech_level,
         llm_confidence=agent1.get("confidence", 0),
         has_description=has_description,
-        validator_bonus=0,
         config=config,
     )
-    final_confidence = scores["final_confidence"]
 
     validator_triggered = False
     agent2: Optional[Dict[str, Any]] = None
 
-    if validator_enabled and final_confidence < validator_threshold:
+    if validator_enabled and scores["final_confidence"] < validator_threshold:
         validator_triggered = True
         agent2 = agent2_validate(
             company_name=name,
@@ -501,42 +501,18 @@ def _phase4_process_one(
             web_fetch_status=cd.get("web_fetch_status", "not_found"),
         )
 
-        if agent2 and agent2.get("validator_verdict") in ("confirm", "override"):
-            updated_conf = agent2.get("updated_confidence", final_confidence)
-            bonus = max(0, updated_conf - final_confidence)
-            bonus = min(bonus, config.get("confidence", {}).get("validator_weight_max", 10))
-            scores = compute_final_confidence(
-                patent_count=epo.patent_count,
-                epo_deeptech_level=epo.epo_deeptech_level,
-                llm_confidence=agent1.get("confidence", 0),
-                has_description=has_description,
-                validator_bonus=bonus,
-                config=config,
-            )
-            final_confidence = scores["final_confidence"]
-
-    val_cfg = config.get("validation", {})
-    override_min_conf = val_cfg.get("override_min_confidence", 65)
-    override_requires_delta = val_cfg.get("override_requires_delta", 20)
-
-    classification = agent1.get("classification", "error")
-    classification_disputed = False
+    outcome = apply_validator(classification, scores, agent2, config)
+    classification = outcome["classification"]
+    confidence = outcome["confidence"]
+    classification_disputed = outcome["classification_disputed"]
+    scores = outcome["scores"]
 
     if agent2 and agent2.get("validator_verdict") == "override":
-        val_conf = agent2.get("updated_confidence", 0)
-        agent1_conf = agent1.get("confidence", 0)
-        conf_delta = val_conf - agent1_conf
-
-        if val_conf >= override_min_conf and conf_delta >= override_requires_delta:
-            classification = agent2["final_classification"]
-            logger.info(f"Override accepted for '{name}': a1={agent1_conf}, val={val_conf}, delta={conf_delta}")
-        else:
-            classification_disputed = True
-            logger.info(f"Override BLOCKED for '{name}': val_conf={val_conf}, delta={conf_delta}")
-
-    confidence = final_confidence
-    if agent2:
-        confidence = min(max(final_confidence, agent2.get("updated_confidence", 0)), 100)
+        logger.info(
+            f"Override {'BLOCKED' if classification_disputed else 'accepted'} for '{name}': "
+            f"validator confidence={agent2.get('updated_confidence')}, "
+            f"pre-validation confidence={scores['final_confidence'] - scores['signal_score_validator']}"
+        )
 
     classifier_input_tokens = agent1.get("classifier_input_tokens", 0)
     classifier_output_tokens = agent1.get("classifier_output_tokens", 0)
@@ -770,20 +746,20 @@ def _process_one_sequential(
     has_description = bool(
         resolved_description and str(resolved_description).strip() not in ("nan", "None", "")
     )
+    classification = agent1.get("classification", "error")
     scores = compute_final_confidence(
+        classification=classification,
         patent_count=epo_result.patent_count,
         epo_deeptech_level=epo_result.epo_deeptech_level,
         llm_confidence=agent1.get("confidence", 0),
         has_description=has_description,
-        validator_bonus=0,
         config=config,
     )
-    final_confidence = scores["final_confidence"]
 
     validator_triggered = False
     agent2: Optional[Dict[str, Any]] = None
 
-    if validator_enabled and final_confidence < validator_threshold:
+    if validator_enabled and scores["final_confidence"] < validator_threshold:
         validator_triggered = True
         agent2 = agent2_validate(
             company_name=name, domain=domain, description=resolved_description,
@@ -793,40 +769,18 @@ def _process_one_sequential(
             web_fetch_status=enrich_result.get("web_fetch_status", "not_found"),
         )
 
-        if agent2 and agent2.get("validator_verdict") in ("confirm", "override"):
-            updated_conf = agent2.get("updated_confidence", final_confidence)
-            bonus = max(0, updated_conf - final_confidence)
-            bonus = min(bonus, config.get("confidence", {}).get("validator_weight_max", 10))
-            scores = compute_final_confidence(
-                patent_count=epo_result.patent_count,
-                epo_deeptech_level=epo_result.epo_deeptech_level,
-                llm_confidence=agent1.get("confidence", 0),
-                has_description=has_description,
-                validator_bonus=bonus,
-                config=config,
-            )
-            final_confidence = scores["final_confidence"]
-
-    val_cfg = config.get("validation", {})
-    override_min_conf = val_cfg.get("override_min_confidence", 65)
-    override_requires_delta = val_cfg.get("override_requires_delta", 20)
-
-    classification = agent1.get("classification", "error")
-    classification_disputed = False
+    outcome = apply_validator(classification, scores, agent2, config)
+    classification = outcome["classification"]
+    confidence = outcome["confidence"]
+    classification_disputed = outcome["classification_disputed"]
+    scores = outcome["scores"]
 
     if agent2 and agent2.get("validator_verdict") == "override":
-        val_conf = agent2.get("updated_confidence", 0)
-        agent1_conf = agent1.get("confidence", 0)
-        conf_delta = val_conf - agent1_conf
-        if val_conf >= override_min_conf and conf_delta >= override_requires_delta:
-            classification = agent2["final_classification"]
-            logger.info(f"Override accepted for '{name}'")
-        else:
-            classification_disputed = True
-
-    confidence = final_confidence
-    if agent2:
-        confidence = min(max(final_confidence, agent2.get("updated_confidence", 0)), 100)
+        logger.info(
+            f"Override {'BLOCKED' if classification_disputed else 'accepted'} for '{name}': "
+            f"validator confidence={agent2.get('updated_confidence')}, "
+            f"pre-validation confidence={scores['final_confidence'] - scores['signal_score_validator']}"
+        )
 
     classifier_input_tokens = agent1.get("classifier_input_tokens", 0)
     classifier_output_tokens = agent1.get("classifier_output_tokens", 0)

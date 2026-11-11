@@ -67,6 +67,18 @@ All settings live in `config.json`.
 | `validator_threshold` | int | `70` | Trigger validator when confidence < this |
 | `max_web_searches` | int | `3` | Max web searches per company in validator |
 | `validator_enabled` | bool | `true` | Enable/disable validator agent |
+| `override_min_confidence` | int | `65` | Validator may change the verdict only if its own confidence is at least this |
+
+### `confidence`
+
+The confidence score is the likelihood that the chosen verdict is correct. It starts from
+the classifier's confidence and is adjusted by patent evidence; if the validator runs, its
+post-research confidence takes over. See `PROJECT_OVERVIEW.md` §7 for the full rules.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `epo_adjust_max` | int | `15` | Max points patent evidence adds when it agrees with the verdict, or subtracts when it contradicts it |
+| `low_evidence_cap` | int | `60` | Confidence ceiling when a company has no description and no patents |
 
 ### `epo`
 

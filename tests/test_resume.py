@@ -153,7 +153,7 @@ class SequentialResumeTests(ResumeTestCase):
         results = self.run_pipeline(companies, resume=True)
 
         self.assertEqual([r["company_name"] for r in results], ["A", "Dup", "Dup", "Z"])
-        self.assertEqual([r["signal_score_llm"] for r in results], [5, 11, 16, 22])
+        self.assertEqual([r["signal_score_llm"] for r in results], [11, 22, 33, 44])
 
     def test_resume_against_a_different_input_is_refused(self):
         self.run_pipeline(_companies(["A", "B"]))

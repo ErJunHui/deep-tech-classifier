@@ -548,7 +548,7 @@ def _write_legend_sheet(wb) -> None:
          "True = Agent 2 ran web search validation; False = only Agent 1 used"),
         ("classification_disputed", "Full Detail",
          "True / False",
-         "True = Agent 2 attempted override but it was blocked (insufficient confidence delta)"),
+         "True = Agent 2 attempted override but it was blocked (its confidence was below override_min_confidence)"),
         ("validation_decision", "Full Detail",
          "AUTO_APPROVE / ESCALATE_FOR_HUMAN_REVIEW / (empty)",
          "AUTO_APPROVE = Agent 2 confident in result; "
@@ -577,7 +577,7 @@ def _write_legend_sheet(wb) -> None:
         ("validator_verdict", "Full Detail",
          "confirm / override / insufficient_evidence / (empty)",
          "confirm = Agent 2 agreed with Agent 1's verdict after web search; "
-         "override = Agent 2 changed the verdict (subject to confidence-delta guard); "
+         "override = Agent 2 disagreed with the verdict (applied unless classification_disputed is True); "
          "insufficient_evidence = Agent 2 could not find enough web evidence to reach a verdict; "
          "empty = validator was not triggered (final_confidence ≥ 70)"),
         # --- Full Detail — token counts & cost ---
