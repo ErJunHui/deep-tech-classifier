@@ -84,7 +84,7 @@ post-research confidence takes over. See `PROJECT_OVERVIEW.md` §7 for the full 
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `epo_package_dir` | string | `"./lib/epo_patent"` | Path to EPO patent package |
+| `epo_package_dir` | string | `"./lib/epo_patent"` | Path to EPO patent package (relative paths are resolved from the project folder) |
 | `enabled` | bool | `true` | Enable/disable EPO patent search |
 
 ### `batch`

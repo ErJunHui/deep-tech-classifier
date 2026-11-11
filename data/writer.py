@@ -217,8 +217,14 @@ def _build_management_row(
 ) -> Dict[str, Any]:
     """Synthesize a single Management View row from a company + result pair."""
     original = company.get("_original_row", {})
-    company_name = original.get("company_name", original.get("Company Name", ""))
-    uen = original.get("uen", original.get("UEN", ""))
+    # Use the values the reader resolved from the configured columns; fall back
+    # to common header spellings for callers that only pass the original row.
+    company_name = (
+        company.get("company_name")
+        or result.get("company_name")
+        or original.get("company_name", original.get("Company Name", ""))
+    )
+    uen = company.get("uen") or original.get("uen", original.get("UEN", ""))
 
     verdict = result.get("classification", "")
     confidence = result.get("confidence", 0) or 0

@@ -23,7 +23,7 @@ from typing import Dict, Any, List, Optional
 
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.confidence import compute_final_confidence, apply_validator
-from pipeline.llm_provider import build_provider, get_cost_rates
+from pipeline.llm_provider import build_provider, get_cost_rates, BATCH_DISCOUNT
 from agents.classifier_agent import classify as agent1_classify, build_batch_request
 from agents.validator_agent import validate as agent2_validate
 from agents.enrichment_agent import enrich as agent0_enrich
@@ -346,6 +346,7 @@ def _phase1_gather(
             "web_fetch_status": enrich_result.get("web_fetch_status", "not_found"),
             "enrichment_input_tokens": enrich_result.get("enrichment_input_tokens", 0),
             "enrichment_output_tokens": enrich_result.get("enrichment_output_tokens", 0),
+            "enrichment_searches": enrich_result.get("enrichment_searches", 0),
             "epo": asdict(epo_result),
         }
         # Round-trip through JSON so fresh and resumed runs see identical data.
@@ -400,7 +401,7 @@ def _phase3_parse(
                 parsed["classifier_output_tokens"] = usage.get("output_tokens", 0)
                 parsed["classifier_cache_read_tokens"] = usage.get("cache_read_input_tokens", 0)
                 parsed["classifier_cache_creation_tokens"] = usage.get("cache_creation_input_tokens", 0)
-                parsed["classifier_cost_usd"] = (
+                parsed["classifier_cost_usd"] = BATCH_DISCOUNT * (
                     parsed["classifier_input_tokens"] * rates["input"]
                     + parsed["classifier_cache_creation_tokens"] * rates["cache_write"]
                     + parsed["classifier_cache_read_tokens"] * rates["cache_read"]
