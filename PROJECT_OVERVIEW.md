@@ -94,7 +94,7 @@ Output row → Excel workbook
 ```
 deep_tech_classifier/
 ├── classify.py                    # Entry point (CLI)
-├── config.json                    # All tuneable settings
+├── config.template.json           # Settings template — copy to config.json (not committed)
 ├── .env                           # API credentials (not in source control)
 │
 ├── agents/

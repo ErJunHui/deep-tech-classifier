@@ -6,7 +6,6 @@ Entry point: python classify.py --input companies.xlsx [--resume]
 
 import argparse
 import logging
-import os
 import sys
 import time
 from datetime import datetime

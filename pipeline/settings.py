@@ -41,8 +41,6 @@ def load_settings(config_path: str = None, env_path: str = None) -> Dict[str, An
     anthropic_key = os.getenv("ANTHROPIC_API_KEY")
     gemini_key = os.getenv("GEMINI_API_KEY")
     openai_key = os.getenv("OPENAI_API_KEY")
-    epo_key = os.getenv("EPO_KEY")
-    epo_secret = os.getenv("EPO_SECRET")
 
     # Load config.json first so we can check which provider is configured
     if not config_path.exists():

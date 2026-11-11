@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from data import writer  # noqa: E402
 from pipeline import epo_bridge, llm_provider, orchestrator as orch  # noqa: E402
+from pipeline.json_utils import extract_json, parse_json  # noqa: E402
 from pipeline.settings import load_settings  # noqa: E402
 
 try:
@@ -21,6 +22,19 @@ try:
     from anthropic.types import Message
 except ImportError:  # pragma: no cover
     anthropic = None
+
+
+class JsonUtilsTests(unittest.TestCase):
+    def test_parses_fenced_wrapped_and_damaged_objects(self):
+        self.assertEqual(parse_json('```json\n{"a": 1}\n```'), {"a": 1})
+        self.assertEqual(parse_json('Here you go: {"a": 1} Hope that helps.'), {"a": 1})
+        self.assertEqual(parse_json('{"a": 1, "b": "x",}'), {"a": 1, "b": "x"})
+
+    def test_text_without_an_object_is_rejected(self):
+        for text in ("", "no json here", "[1, 2]"):
+            with self.assertRaises(json.JSONDecodeError):
+                parse_json(text)
+            self.assertEqual(extract_json(text), "")
 
 
 class SettingsTests(unittest.TestCase):

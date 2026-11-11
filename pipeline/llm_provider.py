@@ -11,7 +11,6 @@ Usage:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
@@ -19,6 +18,8 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+from pipeline.json_utils import extract_json as _extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -113,38 +114,6 @@ class LLMProvider(ABC):
 # ---------------------------------------------------------------------------
 
 _URL_PATTERN = re.compile(r'https?://[^\s\'"<>]+')
-
-
-def _extract_json(text: str) -> str:
-    """Try to extract a JSON object string from free text. Returns '' on failure."""
-    if not text or not text.strip():
-        return ""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.split("\n")
-        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        stripped = "\n".join(inner).strip()
-    try:
-        json.loads(stripped)
-        return stripped
-    except (json.JSONDecodeError, ValueError):
-        pass
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        try:
-            json.loads(match.group(0))
-            return match.group(0)
-        except (json.JSONDecodeError, ValueError):
-            pass
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(text)
-        if repaired and repaired not in ("null", ""):
-            json.loads(repaired)  # validate the repair is parseable
-            return repaired
-    except Exception:
-        pass
-    return ""
 
 
 # ---------------------------------------------------------------------------

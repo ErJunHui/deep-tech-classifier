@@ -5,12 +5,12 @@ Fetches a fresh company description from the web using Claude Haiku + web_search
 Returns web_description, web_description_source, and web_fetch_status.
 """
 
-import json
 import logging
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
-from pipeline.llm_provider import LLMProvider, LLMProviderError
+from pipeline.json_utils import parse_json as _parse_json
+from pipeline.llm_provider import LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,6 @@ def enrich(
         enrichment_cfg = config.get("enrichment", {})
         llm_cfg = config.get("llm", {})
 
-        model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
         max_tokens = enrichment_cfg.get("max_tokens", 1000)
         max_searches = enrichment_cfg.get("max_searches", 2)
         temperature = llm_cfg.get("temperature", 0.1)
@@ -167,38 +166,6 @@ Respond ONLY with the JSON object as specified."""
 def _domain_from_url(url: str) -> Optional[str]:
     match = re.match(r'https?://(?:www\.)?([^/]+)', url)
     return match.group(1) if match else None
-
-
-def _extract_json_str(text: str) -> str:
-    if not text or not text.strip():
-        return ""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.split("\n")
-        inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        stripped = "\n".join(inner).strip()
-    try:
-        json.loads(stripped)
-        return stripped
-    except (json.JSONDecodeError, ValueError):
-        pass
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        candidate = match.group(0)
-        try:
-            json.loads(candidate)
-            return candidate
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return ""
-
-
-def _parse_json(raw_text: str) -> Dict[str, Any]:
-    text = raw_text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(text)
 
 
 def _not_found_result() -> Dict[str, Any]:

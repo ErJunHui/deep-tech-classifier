@@ -1,5 +1,6 @@
-# Secrets
+# Secrets and local settings (copy config.template.json to config.json)
 .env
+config.json
 
 # Nested .env files
 lib/epo_patent/.env
@@ -29,3 +30,9 @@ __pycache__/
 .pytest_cache/
 venv/
 .venv/
+
+# Editor / tool leftovers
+.ipynb_checkpoints/
+*.backup-*
+*.bak
+.claude/settings.local.json

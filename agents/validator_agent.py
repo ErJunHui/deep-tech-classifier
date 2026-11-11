@@ -8,10 +8,10 @@ then returns a verdict: "confirm" | "override" | "insufficient_evidence".
 
 import json
 import logging
-import re
 import time
 from typing import Dict, Any, List, Optional
 
+from pipeline.json_utils import parse_json as _parse_json
 from pipeline.llm_provider import LLMProvider, LLMProviderError
 
 logger = logging.getLogger(__name__)
@@ -189,7 +189,6 @@ def validate(
     llm_cfg = config.get("llm", {})
     val_cfg = config.get("validation", {})
 
-    model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
     max_tokens = llm_cfg.get("max_tokens_validator", 3000)
     temperature = llm_cfg.get("temperature", 0.1)
     max_searches = val_cfg.get("max_web_searches", 3)
@@ -402,72 +401,6 @@ Use ESCALATE_FOR_HUMAN_REVIEW when evidence is contradictory, insufficient, or r
 
 
 _CACHED_SYSTEM = [{"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}]
-
-
-_URL_PATTERN = re.compile(r'https?://[^\s\'"<>]+')
-
-
-def _extract_json_from_text(text: str) -> str:
-    """
-    Scan text for a JSON object. Returns the raw JSON string if found, else "".
-    Handles ```json ... ``` fences and bare JSON objects.
-    """
-    if not text or not text.strip():
-        return ""
-
-    # Strip markdown fences
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        lines = stripped.split("\n")
-        inner_lines = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
-        stripped = "\n".join(inner_lines).strip()
-
-    # Try whole text first
-    try:
-        json.loads(stripped)
-        return stripped
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    # Extract first {...} block
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        candidate = match.group(0)
-        try:
-            json.loads(candidate)
-            return candidate
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(text)
-        if repaired and repaired not in ("null", ""):
-            json.loads(repaired)  # validate the repair is parseable
-            return repaired
-    except Exception:
-        pass
-
-    return ""
-
-
-def _parse_json(raw_text: str) -> Dict[str, Any]:
-    text = raw_text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(text, return_objects=True)
-        if isinstance(repaired, dict):
-            return repaired
-    except Exception:
-        pass
-    return json.loads(text)  # re-raise original JSONDecodeError
 
 
 def _validate_validator_result(result: Dict[str, Any], agent1_classification: str) -> None:
