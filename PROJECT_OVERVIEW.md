@@ -237,7 +237,7 @@ EPO_SECRET=...                   # EPO OPS API consumer secret
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `llm.model` | `claude-haiku-4-5-20251001` | AI model used for all three agents |
+| `llm.model` | `claude-haiku-5-5` | AI model used for all three agents |
 | `validation.validator_threshold` | `70` | Confidence below this triggers Agent 2 |
 | `validation.max_web_searches` | `3` | Max web searches per Agent 2 call |
 | `validation.override_min_confidence` | `65` | Agent 2 override accepted only at or above this |
@@ -274,9 +274,9 @@ python classify.py --help
 
 | Component | Technology |
 |-----------|-----------|
-| AI classification | Claude Haiku (`claude-haiku-4-5-20251001`) via Anthropic API |
+| AI classification | Claude Haiku (`claude-haiku-5-5` by default) via Anthropic API |
 | Batch processing | Anthropic Message Batches API |
-| Web search (Agents 0 & 2) | `web_search_20250305` tool (Claude tool use) |
+| Web search (Agents 0 & 2) | Anthropic web search tool (Claude tool use) |
 | Patent data | EPO Open Patent Services (OPS) API |
 | EPO patent analysis | Embedded EPO package (`lib/epo_patent/`) |
 | Data I/O | pandas, openpyxl |

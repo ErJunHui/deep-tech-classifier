@@ -9,7 +9,7 @@
   },
   "llm": {
     "provider": "anthropic",
-    "model": "claude-haiku-4-5-20251001",
+    "model": "claude-haiku-5-5",
     "max_tokens_classifier": 2000,
     "max_tokens_validator": 2000,
     "temperature": 0.1,

@@ -19,7 +19,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from pipeline import models
 from pipeline.json_utils import extract_json as _extract_json
+from pipeline.models import COST_RATES, DEFAULT_RATES as _DEFAULT_RATES
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +123,6 @@ _URL_PATTERN = re.compile(r'https?://[^\s\'"<>]+')
 # ---------------------------------------------------------------------------
 
 class AnthropicProvider(LLMProvider):
-    _WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
-
     def __init__(self, api_key: str, model: str):
         import anthropic as _anthropic
         self._client = _anthropic.Anthropic(api_key=api_key)
@@ -146,8 +146,13 @@ class AnthropicProvider(LLMProvider):
         """Expose the underlying Anthropic client (needed for batch API calls)."""
         return self._client
 
-    def _create(self, **kwargs):
-        """messages.create with retries; raises LLMProviderError subclasses on failure."""
+    def _create(self, max_tokens, temperature, **kwargs):
+        """messages.create with retries; raises LLMProviderError subclasses on failure.
+
+        max_tokens and temperature are shaped by the model's profile: some
+        models reject temperature, and some need room for thinking.
+        """
+        kwargs.update(models.request_params(self._model, max_tokens, temperature))
         _anthropic = self._anthropic
         max_retries = 3
         for attempt in range(max_retries):
@@ -210,7 +215,7 @@ class AnthropicProvider(LLMProvider):
         no client tool loop. max_searches is enforced by the API via max_uses.
         """
         messages = list(messages)
-        search_tool = {**self._WEB_SEARCH_TOOL, "max_uses": max(int(max_searches), 1)}
+        search_tool = models.anthropic_web_search_tool(self._model, max(int(max_searches), 1))
         sources: List[str] = []
         totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "searches": 0}
 
@@ -473,7 +478,7 @@ class GeminiProvider(LLMProvider):
 # ---------------------------------------------------------------------------
 
 class OpenAIProvider(LLMProvider):
-    _SEARCH_MODEL = "gpt-4o-search-preview"
+    _SEARCH_MODEL = models.OPENAI_SEARCH_MODEL
 
     def __init__(self, api_key: str, model: str):
         try:
@@ -576,7 +581,7 @@ class OpenAIProvider(LLMProvider):
         max_searches: int,
         force_json_prompt: Optional[str] = None,
     ) -> Tuple[LLMResponse, List[str]]:
-        """OpenAI web search via gpt-4o-search-preview."""
+        """OpenAI web search via the dedicated search model."""
         search_model = self._SEARCH_MODEL
         oai_messages = self._build_messages(messages, system)
         try:
@@ -647,77 +652,6 @@ class OpenAIProvider(LLMProvider):
 # Anthropic Message Batches are billed at half the standard token rates.
 BATCH_DISCOUNT = 0.5
 
-# USD per token (not per million)
-COST_RATES: Dict[str, Dict[str, float]] = {
-    "claude-haiku-4-5-20251001": {
-        "input":       1.00 / 1_000_000,
-        "output":      5.00 / 1_000_000,
-        "cache_write": 1.25 / 1_000_000,
-        "cache_read":  0.10 / 1_000_000,
-        "web_search":  10.00 / 1_000,
-    },
-    "claude-haiku-4-5": {
-        "input":       1.00 / 1_000_000,
-        "output":      5.00 / 1_000_000,
-        "cache_write": 1.25 / 1_000_000,
-        "cache_read":  0.10 / 1_000_000,
-        "web_search":  10.00 / 1_000,
-    },
-    "claude-sonnet-4-6": {
-        "input":       3.00 / 1_000_000,
-        "output":      15.00 / 1_000_000,
-        "cache_write": 3.75 / 1_000_000,
-        "cache_read":  0.30 / 1_000_000,
-        "web_search":  10.00 / 1_000,
-    },
-    "gemini-2.5-flash": {
-        "input":       0.15 / 1_000_000,   # $0.15/1M tokens
-        "output":      0.60 / 1_000_000,   # $0.60/1M tokens
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-        "web_search":  35.00 / 1_000,      # $35/1,000 Google Search grounding requests
-    },
-    "gemini-2.5-pro": {
-        "input":       1.25 / 1_000_000,
-        "output":      10.00 / 1_000_000,
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-        "web_search":  35.00 / 1_000,
-    },
-    "gemini-2.0-flash": {
-        "input":       0.10 / 1_000_000,
-        "output":      0.40 / 1_000_000,
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-        "web_search":  35.00 / 1_000,
-    },
-    "gpt-4o-mini": {
-        "input":       0.15 / 1_000_000,
-        "output":      0.60 / 1_000_000,
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-    },
-    "gpt-4o": {
-        "input":       2.50 / 1_000_000,
-        "output":      10.00 / 1_000_000,
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-    },
-    "gpt-4o-search-preview": {
-        "input":       2.50 / 1_000_000,
-        "output":      10.00 / 1_000_000,
-        "cache_write": 0.0,
-        "cache_read":  0.0,
-    },
-}
-
-_DEFAULT_RATES: Dict[str, float] = {
-    "input":       1.00 / 1_000_000,
-    "output":      5.00 / 1_000_000,
-    "cache_write": 0.0,
-    "cache_read":  0.0,
-}
-
 
 def get_cost_rates(model: str) -> Dict[str, float]:
     """Return cost rates for a model (USD per token). Falls back to defaults."""
@@ -746,7 +680,7 @@ def build_provider(config: Dict[str, Any], api_keys: Optional[Dict[str, str]] = 
     """
     llm_cfg = config.get("llm", {})
     provider_name = llm_cfg.get("provider", "anthropic")
-    model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
+    model = models.configured_model(config)
 
     if api_keys is None:
         api_keys = {}

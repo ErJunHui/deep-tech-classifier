@@ -135,7 +135,7 @@ All settings live in `config.json`. Defaults below are those in `config.template
 | Field | Default | Description |
 |---|---|---|
 | `provider` | `"anthropic"` | `"anthropic"`, `"gemini"` or `"openai"` |
-| `model` | `"claude-haiku-4-5-20251001"` | Model name; must belong to the provider |
+| `model` | `"claude-haiku-5-5"` | Model name; must belong to the provider |
 | `max_tokens_classifier` | `2000` | Max output tokens for the classifier |
 | `max_tokens_validator` | `2000` | Max output tokens for the validator |
 | `temperature` | `0.1` | Sampling temperature |
@@ -183,7 +183,7 @@ All settings live in `config.json`. Defaults below are those in `config.template
 
 | Provider | Example models | Batch mode | Web search |
 |---|---|---|---|
-| `"anthropic"` | `claude-haiku-4-5-20251001`, `claude-sonnet-4-6` | Yes | Anthropic web search tool |
+| `"anthropic"` | `claude-haiku-5-5`, `claude-sonnet-5-5` | Yes | Anthropic web search tool |
 | `"gemini"` | `gemini-2.5-flash`, `gemini-2.5-pro` | No | Google Search grounding |
 | `"openai"` | `gpt-4o-mini`, `gpt-4o` | No | `gpt-4o-search-preview` |
 

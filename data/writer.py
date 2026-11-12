@@ -589,7 +589,7 @@ def _write_legend_sheet(wb) -> None:
         # --- Full Detail — token counts & cost ---
         ("classifier_input_tokens", "Full Detail",
          "integer ≥ 0",
-         "Token count sent to Agent 1 (claude-haiku) — 0 on error"),
+         "Token count sent to Agent 1 (classifier) — 0 on error"),
         ("classifier_output_tokens", "Full Detail",
          "integer ≥ 0",
          "Token count returned by Agent 1 — 0 on error"),
@@ -608,8 +608,8 @@ def _write_legend_sheet(wb) -> None:
         ("total_cost_usd", "Full Detail",
          "float (USD)",
          "Estimated cost for all three agents (Agent 0 enrichment + Agent 1 classifier + Agent 2 validator): "
-         "input_tokens × $0.80/1M + output_tokens × $4.00/1M (claude-haiku-4-5 rates) "
-         "+ $0.01 per web search query (Agent 2 validator web searches)"),
+         "tokens × the configured model's per-token rates + the provider's fee per web search "
+         "(rates are listed in pipeline/models.py)"),
     ]
 
     # Header row

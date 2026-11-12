@@ -88,7 +88,6 @@ def _run_pipeline_batch(
     enrichment_enabled = enrichment_cfg.get("enabled", True)
 
     llm_cfg = config.get("llm", {})
-    model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
     max_tokens = llm_cfg.get("max_tokens_classifier", 2000)
     temperature = llm_cfg.get("temperature", 0.1)
 
@@ -172,7 +171,7 @@ def _run_pipeline_batch(
             batch_requests = [
                 build_batch_request(
                     custom_id=str(i),
-                    company_data={**cd, "model": model, "max_tokens": max_tokens, "temperature": temperature},
+                    company_data={**cd, "model": provider.model_name, "max_tokens": max_tokens, "temperature": temperature},
                 )
                 for i, cd in enumerate(company_data_list)
             ]

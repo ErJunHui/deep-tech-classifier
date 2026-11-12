@@ -1,7 +1,7 @@
 """
 Agent 0 — Web Enrichment.
 
-Fetches a fresh company description from the web using Claude Haiku + web_search_20250305.
+Fetches a fresh company description from the web using the configured model's web search.
 Returns web_description, web_description_source, and web_fetch_status.
 """
 

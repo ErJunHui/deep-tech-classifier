@@ -37,37 +37,38 @@ So "take the newest model whose ID contains `haiku`" would select `claude-haiku-
 
 ---
 
-## Step 1: Inventory hardcoded model references
+## Step 1: Inventory hardcoded model references (done)
 
-- [ ] Run the test suite (`python -m unittest discover tests`) and confirm it passes before changing anything.
-- [ ] Search the repo for `claude-`, `gemini-`, `gpt-`, `search-preview` and `web_search_`.
-- [ ] Note each location found. Known places:
-  - [ ] `config.template.json` (`llm.model`)
-  - [ ] `pipeline/llm_provider.py` (price table, `_WEB_SEARCH_TOOL`, `_SEARCH_MODEL`, default in `build_provider`)
-  - [ ] `pipeline/orchestrator.py` (default model in the batch path)
-  - [ ] `agents/classifier_agent.py` (default model, two places)
-  - [ ] `agents/enrichment_agent.py` (docstring)
-  - [ ] `data/writer.py` (legend text naming claude-haiku and its rates)
-  - [ ] `tests/test_fixes.py` (fixtures and expected model names)
-  - [ ] `README.md` and `PROJECT_OVERVIEW.md` (provider table, config reference)
+- [x] Run the test suite (`python -m unittest discover tests`) and confirm it passes before changing anything.
+- [x] Search the repo for `claude-`, `gemini-`, `gpt-`, `search-preview` and `web_search_`.
+- [x] Note each location found. Known places:
+  - [x] `config.template.json` (`llm.model`)
+  - [x] `pipeline/llm_provider.py` (price table, `_WEB_SEARCH_TOOL`, `_SEARCH_MODEL`, default in `build_provider`)
+  - [x] `pipeline/orchestrator.py` (default model in the batch path)
+  - [x] `agents/classifier_agent.py` (default model, two places)
+  - [x] `agents/enrichment_agent.py` (docstring)
+  - [x] `data/writer.py` (legend text naming claude-haiku and its rates)
+  - [x] `tests/test_fixes.py` (fixtures and expected model names)
+  - [x] `README.md` and `PROJECT_OVERVIEW.md` (provider table, config reference)
 
 **Done when:** you have a complete list of every place a model or tool version is named.
 
-## Step 2: Move all model choices into one module (refactor only)
+## Step 2: Move all model choices into one module (done)
 
-- [ ] Create `pipeline/models.py` holding, per provider:
+- [x] Create `pipeline/models.py` holding, per provider:
   - the ordered candidate list for each tier (`fast`, `balanced`, `best`), starting with just the current model
   - search model (OpenAI)
   - a **profile** per model: the request settings that model needs (see below)
-- [ ] Profile fields to start with:
+- [x] Profile fields to start with:
   - whether `temperature` may be sent
   - web-search tool version (Anthropic)
   - thinking setting and any extra `max_tokens` headroom
   - which token-limit parameter to use (OpenAI)
-- [ ] For now, the profiles describe the **current** models only, so behaviour does not change.
-- [ ] Update `llm_provider.py`, `orchestrator.py` and the agents to read from `pipeline/models.py` instead of their own strings.
-- [ ] Remove the four copies of the default `llm_cfg.get("model", "claude-haiku-4-5-20251001")` (`orchestrator.py`, `classifier_agent.py` twice, `llm_provider.py`). With `"model": null` in the config, `.get` returns `None` rather than the default, so each call site must go through one function in `models.py`.
-- [ ] Run the tests. They should pass unchanged.
+- [x] Profiles cover the current models plus `claude-haiku-5-5` and `claude-sonnet-5-5`. A pinned model without a profile gets the request shape the pipeline has always sent.
+- [ ] Run `claude-haiku-5-5` and `claude-sonnet-5-5` end to end with an API key. Their profiles were written from the API reference and have not been exercised against the live API.
+- [x] Update `llm_provider.py`, `orchestrator.py` and the agents to read from `pipeline/models.py` instead of their own strings.
+- [x] Remove the four copies of the default `llm_cfg.get("model", "claude-haiku-4-5-20251001")` (`orchestrator.py`, `classifier_agent.py` twice, `llm_provider.py`). With `"model": null` in the config, `.get` returns `None` rather than the default, so each call site must go through one function in `models.py`.
+- [x] Run the tests. They should pass unchanged.
 
 **Done when:** no model name appears anywhere outside `pipeline/models.py`, `config.template.json`, the tests and the docs.
 
@@ -90,9 +91,9 @@ Sketch (Anthropic):
 
 ```python
 CANDIDATES = {
-    "fast":     ["claude-haiku-4-5"],
-    "balanced": ["claude-sonnet-4-6"],
-    "best":     ["claude-opus-4-6"],
+    "fast":     ["claude-haiku-5-5", "claude-haiku-4-5"],
+    "balanced": ["claude-sonnet-5-5", "claude-sonnet-4-6"],
+    "best":     [],  # add an Opus model once one has been tested
 }
 
 def resolve_anthropic(client, tier, need_batch):
