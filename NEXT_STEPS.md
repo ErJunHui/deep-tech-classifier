@@ -113,7 +113,7 @@ Live checks (one run so far: `claude-haiku-5-5` pinned, 2026-11-12, 5 companies)
 
 - [x] Startup check passes and a full run completes on a pinned 5.5 model.
 - [x] Haiku 5.5 profile: no temperature, 4,000 tokens of thinking headroom (no truncated verdicts), basic web-search tool (searches ran).
-- [ ] Run `"model": null` with `"tier": "fast"` on Anthropic. A pinned model skips the tier resolver, so the model-list lookup has not run live yet.
+- [x] Run `"model": null` with `"tier": "fast"` on Anthropic (done 2026-11-12: resolved to `claude-haiku-5-5` from the live model list).
 - [ ] Run the `balanced` and `best` tiers, which also confirms the Sonnet 5.5 and Opus 5.5 profiles.
 - [ ] Interrupt a run and `--resume` it, to confirm the recorded model is reused.
 - [ ] Run at least one tier on Gemini and OpenAI, if those providers will be used.
