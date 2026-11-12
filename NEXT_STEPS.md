@@ -65,14 +65,15 @@ So "take the newest model whose ID contains `haiku`" would select `claude-haiku-
   - thinking setting and any extra `max_tokens` headroom
   - which token-limit parameter to use (OpenAI)
 - [x] Profiles cover the current models plus `claude-haiku-5-5` and `claude-sonnet-5-5`. A pinned model without a profile gets the request shape the pipeline has always sent.
-- [ ] Run `claude-haiku-5-5` and `claude-sonnet-5-5` end to end with an API key. Their profiles were written from the API reference and have not been exercised against the live API.
+- [x] Run `claude-haiku-5-5` end to end with an API key (done 2026-11-12, pinned, 5 companies, no error rows).
+- [ ] Run `claude-sonnet-5-5` end to end with an API key. Its profile was written from the API reference and has not been exercised against the live API.
 - [x] Update `llm_provider.py`, `orchestrator.py` and the agents to read from `pipeline/models.py` instead of their own strings.
 - [x] Remove the four copies of the default `llm_cfg.get("model", "claude-haiku-4-5-20251001")` (`orchestrator.py`, `classifier_agent.py` twice, `llm_provider.py`). With `"model": null` in the config, `.get` returns `None` rather than the default, so each call site must go through one function in `models.py`.
 - [x] Run the tests. They should pass unchanged.
 
 **Done when:** no model name appears anywhere outside `pipeline/models.py`, `config.template.json`, the tests and the docs.
 
-## Step 3: Add the resolver (done, not yet run against a live API)
+## Step 3: Add the resolver (done; live checks partly complete)
 
 - [x] Add `llm.tier` to `config.template.json` and `pipeline/settings.py`. Keep `llm.model` in the template pinned to the current model until Step 5 is done.
 - [x] Resolution order:
@@ -108,10 +109,14 @@ def resolve_anthropic(client, tier, need_batch):
     )
 ```
 
-Still to do with API keys (none of this has been exercised against a live API):
+Live checks (one run so far: `claude-haiku-5-5` pinned, 2026-11-12, 5 companies):
 
-- [ ] Run `"model": null` with each tier on Anthropic, and at least one tier on Gemini and OpenAI.
-- [ ] Confirm the three 5.5 profiles: no temperature, 4,000 tokens of thinking headroom, basic web-search tool.
+- [x] Startup check passes and a full run completes on a pinned 5.5 model.
+- [x] Haiku 5.5 profile: no temperature, 4,000 tokens of thinking headroom (no truncated verdicts), basic web-search tool (searches ran).
+- [ ] Run `"model": null` with `"tier": "fast"` on Anthropic. A pinned model skips the tier resolver, so the model-list lookup has not run live yet.
+- [ ] Run the `balanced` and `best` tiers, which also confirms the Sonnet 5.5 and Opus 5.5 profiles.
+- [ ] Interrupt a run and `--resume` it, to confirm the recorded model is reused.
+- [ ] Run at least one tier on Gemini and OpenAI, if those providers will be used.
 - [ ] Confirm Gemini responses carry the concrete version in `model_version`, and that it is the same for search and non-search calls. If it differs between the two, the mid-run change check would stop a run wrongly.
 
 Open questions carried over:
@@ -121,7 +126,7 @@ Open questions carried over:
 
 **Done when:** `"model": null, "tier": "fast"` runs end to end on each provider, retiring the first candidate in a test falls through to the second, and old configs still work.
 
-## Step 4: Lock the model for the whole run (done, not yet run against a live API)
+## Step 4: Lock the model for the whole run (done; live checks partly complete)
 
 - [x] Save the resolved model ID(s) in run-level state in `checkpoints/`. Batch mode already has `checkpoints/run_state.json`. Sequential mode only has the per-row JSONL, so give it the same run-state file.
 - [x] On `--resume`, reuse the checkpointed model instead of resolving again. If the user has since pinned a different model, stop with an error rather than mixing models in one output.
