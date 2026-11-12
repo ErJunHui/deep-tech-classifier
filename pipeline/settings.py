@@ -8,6 +8,8 @@ from typing import Dict, Any
 
 from dotenv import load_dotenv
 
+from pipeline.models import TIERS
+
 
 class ConfigError(Exception):
     pass
@@ -65,6 +67,12 @@ def load_settings(config_path: str = None, env_path: str = None) -> Dict[str, An
         raise ConfigError(
             "OPENAI_API_KEY must be set in .env or environment for the openai provider. "
             "See .env.template for setup instructions."
+        )
+
+    tier = config.get("llm", {}).get("tier")
+    if tier is not None and tier not in TIERS:
+        raise ConfigError(
+            f"llm.tier must be one of {', '.join(TIERS)} (got {tier!r})."
         )
 
     return config

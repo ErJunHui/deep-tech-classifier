@@ -7,22 +7,24 @@ from pipeline import llm_provider, models
 from pipeline.epo_bridge import EPOResult
 
 
-class DefaultModelTests(unittest.TestCase):
-    def test_null_or_missing_model_uses_the_provider_default(self):
-        for llm in ({}, {"model": None}, {"provider": "anthropic", "model": ""}):
-            self.assertEqual(models.configured_model({"llm": llm}), "claude-haiku-5-5")
+class RegistryTests(unittest.TestCase):
+    def test_null_missing_or_empty_model_is_not_a_pin(self):
+        for llm in ({}, {"model": None}, {"model": ""}):
+            self.assertIsNone(models.pinned_model({"llm": llm}))
         self.assertEqual(
-            models.configured_model({"llm": {"provider": "gemini", "model": None}}),
-            models.CANDIDATES["gemini"]["fast"][0],
+            models.pinned_model({"llm": {"model": "claude-haiku-4-5-20251001"}}),
+            "claude-haiku-4-5-20251001",
         )
 
-    def test_pinned_model_is_used_as_is(self):
-        config = {"llm": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}}
-        self.assertEqual(models.configured_model(config), "claude-haiku-4-5-20251001")
+    def test_anthropic_tiers(self):
+        tiers = models.CANDIDATES["anthropic"]
+        self.assertEqual(tiers["fast"][0], "claude-haiku-5-5")
+        self.assertEqual(tiers["balanced"][0], "claude-sonnet-5-5")
+        self.assertEqual(tiers["best"][0], "claude-opus-5-5")
 
-    def test_every_candidate_has_a_profile_and_a_price(self):
-        for tiers in models.CANDIDATES.values():
-            for candidates in tiers.values():
+    def test_every_listed_candidate_has_a_profile_and_a_price(self):
+        for provider in models.LISTED_PROVIDERS:
+            for candidates in models.CANDIDATES[provider].values():
                 for model in candidates:
                     self.assertIn(model, models.PROFILES)
                     self.assertIsNotNone(models.PROFILES[model].rates, model)
@@ -37,7 +39,7 @@ class RequestParamsTests(unittest.TestCase):
             )
 
     def test_55_models_omit_temperature_and_get_thinking_headroom(self):
-        for model in ("claude-haiku-5-5", "claude-sonnet-5-5"):
+        for model in ("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"):
             params = models.request_params(model, 2000, 0.1)
             self.assertNotIn("temperature", params)
             self.assertGreater(params["max_tokens"], 2000)

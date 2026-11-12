@@ -4,8 +4,9 @@ Single source of truth for model names, per-model request settings and prices.
 No other module should name a model or a tool version. To support a new model:
 add its profile to PROFILES (with its price), then add it to a candidate list.
 
-Tiers are not selectable from config yet (see NEXT_STEPS.md, Step 3). For now the
-first "fast" candidate of each provider is the default when llm.model is unset.
+pipeline/model_resolver.py turns llm.tier into the first candidate the provider
+still serves. A model goes into a candidate list only after it has been run
+through this pipeline.
 """
 
 from __future__ import annotations
@@ -22,12 +23,14 @@ CANDIDATES: Dict[str, Dict[str, List[str]]] = {
     "anthropic": {
         "fast":     ["claude-haiku-5-5", "claude-haiku-4-5"],
         "balanced": ["claude-sonnet-5-5", "claude-sonnet-4-6"],
-        "best":     [],  # no Opus model has been run through this pipeline yet
+        "best":     ["claude-opus-5-5"],
     },
+    # Gemini tiers are moving aliases; Google repoints them to newer versions.
+    # The version actually used is recorded from each response.
     "gemini": {
-        "fast":     ["gemini-2.5-flash"],
-        "balanced": ["gemini-2.5-flash"],
-        "best":     ["gemini-2.5-pro"],
+        "fast":     ["gemini-flash-lite-latest"],
+        "balanced": ["gemini-flash-latest"],
+        "best":     ["gemini-pro-latest"],
     },
     "openai": {
         "fast":     ["gpt-4o-mini"],
@@ -36,8 +39,14 @@ CANDIDATES: Dict[str, Dict[str, List[str]]] = {
     },
 }
 
+TIERS = ("fast", "balanced", "best")
+DEFAULT_TIER = "fast"
+
+# Providers whose candidates are checked against the API's model list.
+LISTED_PROVIDERS = {"anthropic", "openai"}
+
 # OpenAI runs web search on a dedicated model, not on the main one.
-OPENAI_SEARCH_MODEL = "gpt-4o-search-preview"
+OPENAI_SEARCH_CANDIDATES = ["gpt-4o-search-preview"]
 
 _ANTHROPIC_WEB_SEARCH_BASIC = "web_search_20250305"
 
@@ -71,6 +80,8 @@ class ModelProfile:
     extra_max_tokens: int = 0
     # Anthropic server-side web search tool version.
     web_search_tool: str = _ANTHROPIC_WEB_SEARCH_BASIC
+    # False for models that cannot be used with the Message Batches API.
+    batch: bool = True
     # USD per token; None when the price is unknown.
     rates: Optional[Dict[str, float]] = field(default=None)
 
@@ -80,10 +91,16 @@ class ModelProfile:
 LEGACY_PROFILE = ModelProfile()
 
 PROFILES: Dict[str, ModelProfile] = {
-    # Haiku 5.5 and Sonnet 5.5 reject a non-default temperature and think by
-    # default. Haiku 5.5 prices are for prompts up to 100K tokens.
-    # Sonnet 5.5 also accepts web_search_20260209; the basic version is kept
-    # because it is the one the response parsing has been run against.
+    # The 5.5 models reject a non-default temperature (Opus 5.5 rejects the
+    # parameter outright) and think by default. Haiku 5.5 prices are for
+    # prompts up to 100K tokens.
+    # Sonnet 5.5 and Opus 5.5 also accept web_search_20260209; the basic version
+    # is kept because it is the one the response parsing has been run against.
+    "claude-opus-5-5": ModelProfile(
+        send_temperature=False,
+        extra_max_tokens=4000,
+        rates=_rates(4.00, 20.00, cache_write=5.00, cache_read=0.20, web_search_per_1k=10.00),
+    ),
     "claude-haiku-5-5": ModelProfile(
         send_temperature=False,
         extra_max_tokens=4000,
@@ -124,25 +141,25 @@ _DATED_SNAPSHOT = re.compile(r"-\d{8}$")
 # Lookups
 # ---------------------------------------------------------------------------
 
-def default_model(provider: str = "anthropic") -> str:
-    """The model used when llm.model is not set."""
-    try:
-        return CANDIDATES[provider]["fast"][0]
-    except (KeyError, IndexError):
-        raise ValueError(f"No default model is defined for provider {provider!r}.") from None
+def pinned_model(config: Dict[str, Any]) -> Optional[str]:
+    """The model a config pins, or None when llm.model is missing, null or empty."""
+    return config.get("llm", {}).get("model") or None
 
 
-def configured_model(config: Dict[str, Any]) -> str:
-    """The model a config asks for. A missing or null llm.model means the default."""
-    llm_cfg = config.get("llm", {})
-    return llm_cfg.get("model") or default_model(llm_cfg.get("provider", "anthropic"))
+def base_model_id(model: str) -> str:
+    """A dated snapshot ID (…-20251001) without its date."""
+    return _DATED_SNAPSHOT.sub("", model or "")
+
+
+def has_profile(model: str) -> bool:
+    return model in PROFILES or base_model_id(model) in PROFILES
 
 
 def get_profile(model: str) -> ModelProfile:
     """Profile for a model; a dated snapshot (…-20251001) uses its base model's profile."""
     if model in PROFILES:
         return PROFILES[model]
-    return PROFILES.get(_DATED_SNAPSHOT.sub("", model or ""), LEGACY_PROFILE)
+    return PROFILES.get(base_model_id(model), LEGACY_PROFILE)
 
 
 def request_params(model: str, max_tokens: int, temperature: float) -> Dict[str, Any]:

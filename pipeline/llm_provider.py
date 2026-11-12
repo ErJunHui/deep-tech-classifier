@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from pipeline import models
+from pipeline import model_resolver, models
 from pipeline.json_utils import extract_json as _extract_json
 from pipeline.models import COST_RATES, DEFAULT_RATES as _DEFAULT_RATES
 
@@ -41,6 +41,10 @@ class ProviderConnectionError(LLMProviderError):
     """API connection / server error after retries."""
 
 
+class LLMRefusalError(LLMProviderError):
+    """The model declined the request (stop_reason "refusal")."""
+
+
 # ---------------------------------------------------------------------------
 # Response dataclass
 # ---------------------------------------------------------------------------
@@ -54,6 +58,7 @@ class LLMResponse:
     cache_write_tokens: int = 0
     stop_reason: str = "end_turn"
     searches: int = 0
+    model: str = ""  # model ID the API reported for this response
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +78,41 @@ class LLMProvider(ABC):
     def supports_batching(self) -> bool:
         """True only for Anthropic — Gemini has no batch API equivalent."""
         return False
+
+    # How the model was chosen (model_resolver.ResolvedModel); set by build_provider.
+    resolution: Optional[model_resolver.ResolvedModel] = None
+    # Model ID the API reported in its first response of the run.
+    reported_model: Optional[str] = None
+    # (first, later) when a later response reported a different model.
+    model_drift: Optional[Tuple[str, str]] = None
+
+    @property
+    def search_model_name(self) -> Optional[str]:
+        """Separate model used for web search, when the provider has one."""
+        return None
+
+    def note_model(self, reported: Optional[str]) -> None:
+        """Record the model a response reported; flag it if it differs from the first."""
+        if not reported:
+            return
+        if self.reported_model is None:
+            self.reported_model = reported
+        elif reported != self.reported_model and self.model_drift is None:
+            self.model_drift = (self.reported_model, reported)
+
+    def list_model_ids(self) -> List[str]:
+        """Model IDs the provider currently serves."""
+        raise NotImplementedError(f"{self.provider_name} has no model list")
+
+    def smoke_test(self, temperature: float = 0.1) -> Optional[str]:
+        """One tiny call, so an unusable model fails before any company is processed."""
+        self.complete(
+            messages=[{"role": "user", "content": "Reply with the single word OK."}],
+            system="This is a connectivity check.",
+            max_tokens=64,
+            temperature=temperature,
+        )
+        return self.reported_model
 
     @abstractmethod
     def complete(
@@ -146,6 +186,18 @@ class AnthropicProvider(LLMProvider):
         """Expose the underlying Anthropic client (needed for batch API calls)."""
         return self._client
 
+    def list_model_ids(self) -> List[str]:
+        return [m.id for m in self._client.models.list()]
+
+    def _checked(self, response):
+        """Record the reported model; turn a refusal into an error."""
+        self.note_model(getattr(response, "model", None))
+        if response.stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) or "unspecified"
+            raise LLMRefusalError(f"The model declined the request (category: {category}).")
+        return response
+
     def _create(self, max_tokens, temperature, **kwargs):
         """messages.create with retries; raises LLMProviderError subclasses on failure.
 
@@ -158,7 +210,7 @@ class AnthropicProvider(LLMProvider):
         for attempt in range(max_retries):
             last = attempt == max_retries - 1
             try:
-                return self._client.messages.create(model=self._model, **kwargs)
+                return self._checked(self._client.messages.create(model=self._model, **kwargs))
             except _anthropic.RateLimitError as e:
                 if last:
                     raise ProviderRateLimitError("Rate limit exceeded after retries") from e
@@ -196,6 +248,7 @@ class AnthropicProvider(LLMProvider):
             cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
             cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
             stop_reason=response.stop_reason or "end_turn",
+            model=getattr(response, "model", "") or "",
         )
 
     def complete_with_search(
@@ -294,6 +347,7 @@ class AnthropicProvider(LLMProvider):
             cache_read_tokens=totals["cache_read"],
             cache_write_tokens=totals["cache_write"],
             searches=totals["searches"],
+            model=getattr(response, "model", "") or "",
         ), sources
 
 
@@ -361,6 +415,12 @@ class GeminiProvider(LLMProvider):
             contents.append({"role": role, "parts": [{"text": text_part}]})
         return contents
 
+    def _reported(self, response) -> str:
+        """The concrete model version behind the request (aliases can be repointed)."""
+        reported = getattr(response, "model_version", None) or ""
+        self.note_model(reported)
+        return reported
+
     def _get_usage(self, response) -> Tuple[int, int]:
         usage = getattr(response, "usage_metadata", None)
         input_tokens = getattr(usage, "prompt_token_count", 0) if usage else 0
@@ -407,7 +467,10 @@ class GeminiProvider(LLMProvider):
             response = self._call_with_backoff(_call)
             text = response.text if hasattr(response, "text") else ""
             in_tok, out_tok = self._get_usage(response)
-            return LLMResponse(text=text, input_tokens=in_tok, output_tokens=out_tok)
+            return LLMResponse(
+                text=text, input_tokens=in_tok, output_tokens=out_tok,
+                model=self._reported(response),
+            )
         except (LLMProviderError, ProviderRateLimitError):
             raise
         except Exception as e:
@@ -442,6 +505,7 @@ class GeminiProvider(LLMProvider):
             response = self._call_with_backoff(_call)
             text = response.text if hasattr(response, "text") else ""
             in_tok, out_tok = self._get_usage(response)
+            reported = self._reported(response)
 
             # Extract grounding sources
             sources: List[str] = []
@@ -466,7 +530,10 @@ class GeminiProvider(LLMProvider):
                 text = followup.text
 
             searches_count = 1 if sources else 0
-            return LLMResponse(text=text, input_tokens=in_tok, output_tokens=out_tok, searches=searches_count), sources
+            return LLMResponse(
+                text=text, input_tokens=in_tok, output_tokens=out_tok,
+                searches=searches_count, model=reported,
+            ), sources
         except (LLMProviderError, ProviderRateLimitError):
             raise
         except Exception as e:
@@ -478,8 +545,6 @@ class GeminiProvider(LLMProvider):
 # ---------------------------------------------------------------------------
 
 class OpenAIProvider(LLMProvider):
-    _SEARCH_MODEL = models.OPENAI_SEARCH_MODEL
-
     def __init__(self, api_key: str, model: str):
         try:
             import openai as _openai
@@ -491,6 +556,14 @@ class OpenAIProvider(LLMProvider):
                 "Install with: pip install openai"
             )
         self._model = model
+        self._search_model = models.OPENAI_SEARCH_CANDIDATES[0]
+
+    @property
+    def search_model_name(self) -> Optional[str]:
+        return self._search_model
+
+    def list_model_ids(self) -> List[str]:
+        return [m.id for m in self._client.models.list()]
 
     @property
     def provider_name(self) -> str:
@@ -551,10 +624,12 @@ class OpenAIProvider(LLMProvider):
                 )
                 text = response.choices[0].message.content or "" if response.choices else ""
                 usage = response.usage
+                self.note_model(getattr(response, "model", None))
                 return LLMResponse(
                     text=text,
                     input_tokens=getattr(usage, "prompt_tokens", 0),
                     output_tokens=getattr(usage, "completion_tokens", 0),
+                    model=getattr(response, "model", "") or "",
                 )
             except self._openai.RateLimitError:
                 wait = 60 * (attempt + 1)
@@ -582,7 +657,7 @@ class OpenAIProvider(LLMProvider):
         force_json_prompt: Optional[str] = None,
     ) -> Tuple[LLMResponse, List[str]]:
         """OpenAI web search via the dedicated search model."""
-        search_model = self._SEARCH_MODEL
+        search_model = self._search_model
         oai_messages = self._build_messages(messages, system)
         try:
             response = self._client.chat.completions.create(
@@ -669,42 +744,66 @@ def get_cost_rates(model: str) -> Dict[str, float]:
 # Factory
 # ---------------------------------------------------------------------------
 
-def build_provider(config: Dict[str, Any], api_keys: Optional[Dict[str, str]] = None) -> LLMProvider:
+_PROVIDERS = {
+    "anthropic": ("ANTHROPIC_API_KEY", AnthropicProvider),
+    "gemini": ("GEMINI_API_KEY", GeminiProvider),
+    "openai": ("OPENAI_API_KEY", OpenAIProvider),
+}
+
+
+def build_provider(
+    config: Dict[str, Any],
+    api_keys: Optional[Dict[str, str]] = None,
+    model: Optional[str] = None,
+    search_model: Optional[str] = None,
+) -> LLMProvider:
     """
-    Build an LLM provider from config.
+    Build an LLM provider from config and choose its model.
 
     Args:
         config: Loaded pipeline config dict (from load_settings).
-        api_keys: Optional dict with keys "anthropic" and/or "gemini".
-                  Falls back to config["anthropic_api_key"] / config["gemini_api_key"].
+        api_keys: Optional dict keyed by provider name. Falls back to the
+                  provider's environment variable.
+        model: Model locked by a run checkpoint. When given it is used as-is;
+               otherwise llm.model (pinned) or llm.tier decides.
+        search_model: Web-search model locked by a run checkpoint (OpenAI only).
+
+    Raises:
+        model_resolver.ModelSetupError: no usable model for the configured tier.
     """
     llm_cfg = config.get("llm", {})
     provider_name = llm_cfg.get("provider", "anthropic")
-    model = models.configured_model(config)
-
-    if api_keys is None:
-        api_keys = {}
-
-    if provider_name == "anthropic":
-        api_key = api_keys.get("anthropic") or os.getenv("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY is required for the anthropic provider.")
-        return AnthropicProvider(api_key=api_key, model=model)
-
-    elif provider_name == "gemini":
-        api_key = api_keys.get("gemini") or os.getenv("GEMINI_API_KEY", "")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY is required for the gemini provider.")
-        return GeminiProvider(api_key=api_key, model=model)
-
-    elif provider_name == "openai":
-        api_key = api_keys.get("openai") or os.getenv("OPENAI_API_KEY", "")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY is required for the openai provider.")
-        return OpenAIProvider(api_key=api_key, model=model)
-
-    else:
+    if provider_name not in _PROVIDERS:
         raise ValueError(
             f"Unknown provider {provider_name!r}. "
             "Supported values: 'anthropic', 'gemini', 'openai'."
         )
+    env_var, provider_cls = _PROVIDERS[provider_name]
+    api_key = (api_keys or {}).get(provider_name) or os.getenv(env_var, "")
+    if not api_key:
+        raise ValueError(f"{env_var} is required for the {provider_name} provider.")
+
+    provider = provider_cls(api_key=api_key, model=model or "")
+    if model:
+        resolution = model_resolver.ResolvedModel(model, "checkpoint")
+    else:
+        need_batch = provider.supports_batching and config.get("batch", {}).get("enabled", True)
+        resolution = model_resolver.resolve_model(
+            provider=provider_name,
+            tier=llm_cfg.get("tier"),
+            pinned=models.pinned_model(config),
+            need_batch=need_batch,
+            list_models=provider.list_model_ids,
+        )
+    provider._model = resolution.model
+    provider.resolution = resolution
+
+    if provider_name == "openai":
+        provider._search_model = search_model or model_resolver.resolve_openai_search_model(
+            provider.list_model_ids
+        )
+
+    logger.info(f"Model: {resolution.model} ({provider_name}, {resolution.describe()})")
+    if provider.search_model_name:
+        logger.info(f"Web-search model: {provider.search_model_name}")
+    return provider

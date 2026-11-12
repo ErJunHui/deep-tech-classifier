@@ -317,6 +317,7 @@ def classify(
                     f"Agent 1 classified '{company_name}' as "
                     f"{result['classification']} (confidence={result['confidence']})"
                 )
+                result["model"] = getattr(response, "model", "") or model
                 result["classifier_input_tokens"] = classifier_input_tokens
                 result["classifier_output_tokens"] = classifier_output_tokens
                 result["classifier_cache_read_tokens"] = classifier_cache_read_tokens

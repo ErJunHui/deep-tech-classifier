@@ -66,6 +66,7 @@ RESULT_COLUMNS = [
     "enrichment_input_tokens",
     "enrichment_output_tokens",
     "total_cost_usd",
+    "model",
 ]
 
 MANAGEMENT_COLUMNS = [
@@ -115,7 +116,7 @@ def write_results(
     Write results to an Excel file with three sheets:
       Sheet 1: Overview — vertical metrics dashboard.
       Sheet 2: Management View — 10-col decision sheet with colour coding.
-      Sheet 3: Full Detail — all 37 columns unchanged.
+      Sheet 3: Full Detail — every result column.
     """
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -343,6 +344,7 @@ def _write_overview_sheet(
             ("End Time", run_stats.get("end_time", "N/A")),
             ("Total Runtime", run_stats.get("total_runtime_s", "N/A")),
         ]),
+        ("Model", _model_metrics(run_stats.get("model") or {})),
     ]
 
     style_group_header = Font(bold=True, size=12)
@@ -376,6 +378,26 @@ def _write_overview_sheet(
     # Column widths
     ws.column_dimensions["A"].width = 36
     ws.column_dimensions["B"].width = 28
+
+
+def _model_metrics(model: Dict[str, Any]) -> List[tuple]:
+    """Overview rows naming the model that produced this file."""
+    source = model.get("source")
+    if source == "tier":
+        selected = f"tier '{model.get('tier')}'"
+    elif source == "pinned":
+        selected = "pinned in config"
+    else:
+        selected = "N/A"
+    metrics = [
+        ("Provider", model.get("provider") or "N/A"),
+        ("Model Requested", model.get("requested") or "N/A"),
+        ("Model Reported by API", model.get("reported") or "N/A"),
+        ("Selected By", selected),
+    ]
+    if model.get("search_model"):
+        metrics.append(("Web-Search Model", model["search_model"]))
+    return metrics
 
 
 def _write_management_sheet(
@@ -610,6 +632,10 @@ def _write_legend_sheet(wb) -> None:
          "Estimated cost for all three agents (Agent 0 enrichment + Agent 1 classifier + Agent 2 validator): "
          "tokens × the configured model's per-token rates + the provider's fee per web search "
          "(rates are listed in pipeline/models.py)"),
+        ("model", "Full Detail",
+         "string",
+         "Model ID the API reported for this company's classifier call; empty on error. "
+         "The Overview sheet shows the model requested and how it was selected"),
     ]
 
     # Header row

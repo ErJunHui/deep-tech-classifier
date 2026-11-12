@@ -135,7 +135,8 @@ All settings live in `config.json`. Defaults below are those in `config.template
 | Field | Default | Description |
 |---|---|---|
 | `provider` | `"anthropic"` | `"anthropic"`, `"gemini"` or `"openai"` |
-| `model` | `"claude-haiku-5-5"` | Model name; must belong to the provider |
+| `model` | `"claude-haiku-5-5"` | Pins an exact model; must belong to the provider. Set to `null` to let `tier` choose |
+| `tier` | `"fast"` | `"fast"`, `"balanced"` or `"best"`. Used only when `model` is `null`: picks the first tested model for the tier that the provider still serves |
 | `max_tokens_classifier` | `2000` | Max output tokens for the classifier |
 | `max_tokens_validator` | `2000` | Max output tokens for the validator |
 | `temperature` | `0.1` | Sampling temperature |

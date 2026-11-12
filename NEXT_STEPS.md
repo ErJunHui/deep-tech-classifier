@@ -72,20 +72,20 @@ So "take the newest model whose ID contains `haiku`" would select `claude-haiku-
 
 **Done when:** no model name appears anywhere outside `pipeline/models.py`, `config.template.json`, the tests and the docs.
 
-## Step 3: Add the resolver
+## Step 3: Add the resolver (done, not yet run against a live API)
 
-- [ ] Add `llm.tier` to `config.template.json` and `pipeline/settings.py`. Keep `llm.model` in the template pinned to the current model until Step 5 is done.
-- [ ] Resolution order:
+- [x] Add `llm.tier` to `config.template.json` and `pipeline/settings.py`. Keep `llm.model` in the template pinned to the current model until Step 5 is done.
+- [x] Resolution order:
   1. If `llm.model` is set, use it as-is (pinned). If it has no profile, use the profile of the current default and log a warning.
   2. Anthropic and OpenAI: list the models the API serves, then take the first candidate for the tier that appears in the list. When `batch.enabled` is true, skip candidates that do not support batch.
   3. Gemini: map tier to `gemini-flash-lite-latest` / `gemini-flash-latest` / `gemini-pro-latest`.
-- [ ] Resolve the OpenAI search model the same way, from its own candidate list.
-- [ ] The Anthropic web-search tool version comes from the resolved model's profile. It is not resolved separately.
-- [ ] Add handling for `stop_reason: "refusal"` in the Anthropic provider, so a refusal is reported as a row error rather than parsed as an empty answer.
-- [ ] Resolve **once** at startup, before any company is processed.
-- [ ] After resolving, make one small test call (a few tokens, using the model's profile). A model that is listed but rejects the request then fails at startup, not at company 1.
-- [ ] If no candidate is available, fail fast with a clear error that lists the candidates tried and the models the API returned, so the user can pin one.
-- [ ] Tests: mock the list endpoints so tests still need no API keys or network. Cover pinned model, each provider, first candidate retired (falls through to the second), no candidate available, and batch filtering.
+- [x] Resolve the OpenAI search model the same way, from its own candidate list.
+- [x] The Anthropic web-search tool version comes from the resolved model's profile. It is not resolved separately.
+- [x] Add handling for `stop_reason: "refusal"` in the Anthropic provider, so a refusal is reported as a row error rather than parsed as an empty answer.
+- [x] Resolve **once** at startup, before any company is processed.
+- [x] After resolving, make one small test call (a few tokens, using the model's profile). A model that is listed but rejects the request then fails at startup, not at company 1.
+- [x] If no candidate is available, fail fast with a clear error that lists the candidates tried and the models the API returned, so the user can pin one.
+- [x] Tests: mock the list endpoints so tests still need no API keys or network. Cover pinned model, each provider, first candidate retired (falls through to the second), no candidate available, and batch filtering.
 
 Sketch (Anthropic):
 
@@ -93,7 +93,7 @@ Sketch (Anthropic):
 CANDIDATES = {
     "fast":     ["claude-haiku-5-5", "claude-haiku-4-5"],
     "balanced": ["claude-sonnet-5-5", "claude-sonnet-4-6"],
-    "best":     [],  # add an Opus model once one has been tested
+    "best":     ["claude-opus-5-5"],
 }
 
 def resolve_anthropic(client, tier, need_batch):
@@ -108,22 +108,28 @@ def resolve_anthropic(client, tier, need_batch):
     )
 ```
 
-To check before coding:
+Still to do with API keys (none of this has been exercised against a live API):
+
+- [ ] Run `"model": null` with each tier on Anthropic, and at least one tier on Gemini and OpenAI.
+- [ ] Confirm the three 5.5 profiles: no temperature, 4,000 tokens of thinking headroom, basic web-search tool.
+- [ ] Confirm Gemini responses carry the concrete version in `model_version`, and that it is the same for search and non-search calls. If it differs between the two, the mid-run change check would stop a run wrongly.
+
+Open questions carried over:
 
 - Whether the Anthropic `/v1/models` response reports batch support. `capabilities` is a nested dict (`m.capabilities["..."]["supported"]`), not an object. If there is no batch flag, keep it in the profile as the sketch does.
 - Whether newer OpenAI models need a different token-limit parameter and restrict `temperature`, and what replaces `gpt-4o-search-preview`. The replacement may be a different API rather than a new model name, which would be a code change in `OpenAIProvider`.
 
 **Done when:** `"model": null, "tier": "fast"` runs end to end on each provider, retiring the first candidate in a test falls through to the second, and old configs still work.
 
-## Step 4: Lock the model for the whole run
+## Step 4: Lock the model for the whole run (done, not yet run against a live API)
 
-- [ ] Save the resolved model ID(s) in run-level state in `checkpoints/`. Batch mode already has `checkpoints/run_state.json`. Sequential mode only has the per-row JSONL, so give it the same run-state file.
-- [ ] On `--resume`, reuse the checkpointed model instead of resolving again. If the user has since pinned a different model, stop with an error rather than mixing models in one output.
-- [ ] Batch mode: a batch already submitted before the interruption keeps the model it was submitted with. Check the run state matches before collecting its results.
-- [ ] Record the model the API reports in each response (Anthropic `response.model`; Gemini's reported model version, to be confirmed in the SDK), not the name that was requested. This matters for Gemini, where the alias can be repointed between a run and its resume.
-- [ ] Gemini: if the reported version changes during a run or on resume, stop with an error that names both versions.
-- [ ] Log the resolved model at startup.
-- [ ] Add the resolved model(s) to the **Overview** sheet (`data/writer.py`) and to the **Full Detail** sheet per row.
+- [x] Save the resolved model ID(s) in run-level state in `checkpoints/`. Batch mode already has `checkpoints/run_state.json`. Sequential mode only has the per-row JSONL, so give it the same run-state file.
+- [x] On `--resume`, reuse the checkpointed model instead of resolving again. If the user has since pinned a different model, stop with an error rather than mixing models in one output.
+- [x] Batch mode: a batch already submitted before the interruption keeps the model it was submitted with. Check the run state matches before collecting its results.
+- [x] Record the model the API reports in each response (Anthropic `response.model`; Gemini's reported model version, to be confirmed in the SDK), not the name that was requested. This matters for Gemini, where the alias can be repointed between a run and its resume.
+- [x] Gemini: if the reported version changes during a run or on resume, stop with an error that names both versions.
+- [x] Log the resolved model at startup.
+- [x] Add the resolved model(s) to the **Overview** sheet (`data/writer.py`) and to the **Full Detail** sheet per row.
 
 **Done when:** an interrupted run resumed after a new model release still uses the original model, and every output file names the model the API reported.
 
