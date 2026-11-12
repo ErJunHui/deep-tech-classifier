@@ -9,7 +9,7 @@ from pipeline.epo_bridge import EPOResult
 
 class RegistryTests(unittest.TestCase):
     def test_null_missing_or_empty_model_is_not_a_pin(self):
-        for llm in ({}, {"model": None}, {"model": ""}):
+        for llm in ({}, {"model": None}, {"model": ""}, {"model": "null"}, {"model": " None "}):
             self.assertIsNone(models.pinned_model({"llm": llm}))
         self.assertEqual(
             models.pinned_model({"llm": {"model": "claude-haiku-4-5-20251001"}}),

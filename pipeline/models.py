@@ -142,8 +142,18 @@ _DATED_SNAPSHOT = re.compile(r"-\d{8}$")
 # ---------------------------------------------------------------------------
 
 def pinned_model(config: Dict[str, Any]) -> Optional[str]:
-    """The model a config pins, or None when llm.model is missing, null or empty."""
-    return config.get("llm", {}).get("model") or None
+    """
+    The model a config pins, or None when llm.model is missing, null or empty.
+
+    The quoted strings "null" and "none" also count as unset: they are an easy
+    slip when editing JSON by hand and are never real model names.
+    """
+    model = config.get("llm", {}).get("model")
+    if isinstance(model, str):
+        model = model.strip()
+        if model.lower() in ("", "null", "none"):
+            return None
+    return model or None
 
 
 def base_model_id(model: str) -> str:
