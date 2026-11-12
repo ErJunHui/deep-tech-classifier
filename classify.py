@@ -19,6 +19,7 @@ from pipeline.settings import load_settings, ConfigError
 from data.reader import read_companies
 from data.writer import make_output_path, write_results, write_incremental
 from pipeline.orchestrator import run_pipeline, load_run_state, load_partial_results, ResumeError
+from pipeline.model_resolver import ModelSetupError
 
 
 def setup_logging(log_level: str = "INFO") -> None:
@@ -163,6 +164,9 @@ def main():
     except ResumeError as e:
         print(f"[FATAL] Cannot resume: {e}", file=sys.stderr)
         sys.exit(1)
+    except ModelSetupError as e:
+        print(f"[FATAL] Model problem: {e}", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         logger.warning("Interrupted. Progress is checkpointed — rerun with --resume to continue.")
         try:
@@ -179,8 +183,10 @@ def main():
     total_runtime = round(t_end - t_start, 1)
 
     # Final write with summary
+    final_state = load_run_state() or {}
     run_stats = {
-        "run_id": (load_run_state() or {}).get("run_id", "unknown"),
+        "run_id": final_state.get("run_id", "unknown"),
+        "model": final_state.get("model") or {},
         "start_time": start_time.isoformat(),
         "end_time": end_time.isoformat(),
         "total_runtime_s": total_runtime,

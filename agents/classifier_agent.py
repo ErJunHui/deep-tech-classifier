@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 
 from pipeline.epo_bridge import EPOResult
 from pipeline.json_utils import parse_json as _parse_json
+from pipeline import models
 from pipeline.llm_provider import LLMProvider, LLMProviderError, ProviderRateLimitError, get_cost_rates
 
 logger = logging.getLogger(__name__)
@@ -282,7 +283,7 @@ def classify(
     On persistent failure returns error sentinel.
     """
     llm_cfg = config.get("llm", {})
-    model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
+    model = provider.model_name
     max_tokens = llm_cfg.get("max_tokens_classifier", 3000)
     temperature = llm_cfg.get("temperature", 0.1)
     max_retries = llm_cfg.get("max_retries_on_parse_error", 2)
@@ -316,6 +317,7 @@ def classify(
                     f"Agent 1 classified '{company_name}' as "
                     f"{result['classification']} (confidence={result['confidence']})"
                 )
+                result["model"] = getattr(response, "model", "") or model
                 result["classifier_input_tokens"] = classifier_input_tokens
                 result["classifier_output_tokens"] = classifier_output_tokens
                 result["classifier_cache_read_tokens"] = classifier_cache_read_tokens
@@ -426,12 +428,16 @@ def build_batch_request(custom_id: str, company_data: dict) -> dict:
         epo=epo,
         web_sourced=company_data.get("web_sourced", False),
     )
+    model = company_data["model"]
     return {
         "custom_id": custom_id,
         "params": {
-            "model": company_data.get("model", "claude-haiku-4-5-20251001"),
-            "max_tokens": company_data.get("max_tokens", 2000),
-            "temperature": company_data.get("temperature", 0.1),
+            "model": model,
+            **models.request_params(
+                model,
+                company_data.get("max_tokens", 2000),
+                company_data.get("temperature", 0.1),
+            ),
             "system": _CACHED_SYSTEM,
             "messages": [{"role": "user", "content": user_msg}],
         },

@@ -24,7 +24,9 @@ from typing import Dict, Any, List, Optional
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
-from pipeline.llm_provider import build_provider, get_cost_rates, BATCH_DISCOUNT
+from pipeline import models, validation_record
+from pipeline.llm_provider import build_provider, get_cost_rates, cost_known, BATCH_DISCOUNT
+from pipeline.model_resolver import ModelSetupError
 from agents.classifier_agent import (
     classify as agent1_classify,
     build_batch_request,
@@ -40,7 +42,11 @@ RUN_STATE_FILE = "checkpoints/run_state.json"
 
 
 class ResumeError(Exception):
-    """Checkpoint data does not match the input file being resumed."""
+    """Checkpoint data does not match the input file or config being resumed."""
+
+
+class ModelChangedError(ModelSetupError):
+    """The API answered with a different model than the one this run started with."""
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +62,128 @@ def run_pipeline(
     batch_cfg = config.get("batch", {})
     batch_enabled = batch_cfg.get("enabled", True)
 
+    # The model is chosen once, here, before any company is processed. A
+    # resumed run reuses the model recorded in its run state.
+    run_state = _load_matching_run_state(resume_run_id)
+    provider = _start_provider(config, run_state)
+    model_info = _model_info(provider, run_state)
+    _warn_if_unvalidated(model_info)
+    if run_state is not None:
+        run_state["model"] = model_info
+        _save_run_state(run_state)
+
+    if batch_enabled and provider.supports_batching:
+        return _run_pipeline_batch(
+            companies, config, output_path, resume_run_id, provider, run_state, model_info)
     if batch_enabled:
-        return _run_pipeline_batch(companies, config, output_path, resume_run_id)
-    else:
-        return _run_pipeline_sequential(companies, config, output_path, resume_run_id)
+        logger.warning(
+            f"Provider '{provider.provider_name}' does not support batching. "
+            "Falling back to sequential pipeline."
+        )
+    return _run_pipeline_sequential(
+        companies, config, output_path, resume_run_id, provider, run_state, model_info)
+
+
+# ---------------------------------------------------------------------------
+# Model selection and locking
+# ---------------------------------------------------------------------------
+
+def _load_matching_run_state(resume_run_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not resume_run_id:
+        return None
+    run_state = load_run_state()
+    if run_state is None or run_state.get("run_id") != resume_run_id:
+        logger.warning(f"run_state.json mismatch. Creating fresh state for {resume_run_id}.")
+        return None
+    return run_state
+
+
+def _start_provider(config: Dict[str, Any], run_state: Optional[Dict[str, Any]]):
+    """Build the provider with the run's model and check that the model answers."""
+    llm_cfg = config.get("llm", {})
+    locked = (run_state or {}).get("model") or {}
+
+    if locked:
+        provider_name = llm_cfg.get("provider", "anthropic")
+        if locked.get("provider") != provider_name:
+            raise ResumeError(
+                f"this run was started with provider '{locked.get('provider')}', but the "
+                f"config now says '{provider_name}'. Restore the provider to resume, "
+                "or start a fresh run without --resume."
+            )
+        pinned = models.pinned_model(config)
+        if pinned and pinned != locked.get("requested"):
+            raise ResumeError(
+                f"this run was started with model '{locked.get('requested')}', but the "
+                f"config now pins '{pinned}'. Mixing models in one output is not allowed. "
+                f"Set llm.model back to '{locked.get('requested')}' (or remove it) to resume, "
+                "or start a fresh run without --resume."
+            )
+
+    provider = build_provider(
+        config, model=locked.get("requested"), search_model=locked.get("search_model"))
+
+    try:
+        reported = provider.smoke_test(llm_cfg.get("temperature", 0.1))
+    except Exception as e:
+        raise ModelSetupError(
+            f"model '{provider.model_name}' failed its startup check: {e}"
+        ) from e
+
+    expected = locked.get("reported")
+    if expected and reported and reported != expected:
+        raise ModelChangedError(
+            f"this run was started with model '{expected}', but '{provider.model_name}' "
+            f"now answers as '{reported}'. Resuming would mix two models in one output. "
+            f"Set llm.model to '{expected}' if it is still available, "
+            "or start a fresh run without --resume."
+        )
+    return provider
+
+
+def _model_info(provider, run_state: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """What the run state and the output record about the run's model."""
+    locked = (run_state or {}).get("model") or {}
+    reported = getattr(provider, "reported_model", None)
+    if locked:
+        return {**locked, "reported": locked.get("reported") or reported}
+    resolution = getattr(provider, "resolution", None)
+    return {
+        "provider": provider.provider_name,
+        "requested": provider.model_name,
+        "reported": reported,
+        "search_model": getattr(provider, "search_model_name", None),
+        "source": getattr(resolution, "source", "pinned"),
+        "tier": getattr(resolution, "tier", None),
+    }
+
+
+def _warn_if_unvalidated(model_info: Dict[str, Any]) -> None:
+    """Warn when the run's model is not the one that last passed the reference check."""
+    warning = validation_record.warning_for(
+        model_info.get("provider"), model_info.get("reported") or model_info.get("requested"))
+    if warning:
+        logger.warning(warning)
+
+
+def _check_model_drift(provider) -> None:
+    """Stop the run if a response came from a different model than the first one."""
+    drift = getattr(provider, "model_drift", None)
+    if drift:
+        raise ModelChangedError(
+            f"the API began answering as '{drift[1]}' after this run started with "
+            f"'{drift[0]}'. The run has stopped so the output does not mix two models; "
+            "companies finished so far are checkpointed. Set llm.model to a fixed "
+            "version and start a fresh run."
+        )
+
+
+def _rates_for(provider) -> Dict[str, float]:
+    """Price by the configured model; for an unlisted alias, by the version the API reported."""
+    name = provider.model_name
+    if not models.has_profile(name):
+        name = getattr(provider, "reported_model", None) or name
+    return get_cost_rates(name)
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +195,9 @@ def _run_pipeline_batch(
     config: Dict[str, Any],
     output_path: str,
     resume_run_id: Optional[str],
+    provider,
+    run_state: Optional[Dict[str, Any]],
+    model_info: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     pipeline_cfg = config.get("pipeline", {})
     val_cfg = config.get("validation", {})
@@ -88,29 +215,13 @@ def _run_pipeline_batch(
     enrichment_enabled = enrichment_cfg.get("enabled", True)
 
     llm_cfg = config.get("llm", {})
-    model = llm_cfg.get("model", "claude-haiku-4-5-20251001")
     max_tokens = llm_cfg.get("max_tokens_classifier", 2000)
     temperature = llm_cfg.get("temperature", 0.1)
 
     epo_key = os.getenv("EPO_KEY")
     epo_secret = os.getenv("EPO_SECRET")
 
-    provider = build_provider(config)
-    if not provider.supports_batching:
-        logger.warning(
-            f"Provider '{provider.provider_name}' does not support batching. "
-            "Falling back to sequential pipeline."
-        )
-        return _run_pipeline_sequential(companies, config, output_path, resume_run_id)
-    _rates = get_cost_rates(provider.model_name)
-
-    # Load or create run state
-    run_state = None
-    if resume_run_id:
-        run_state = load_run_state()
-        if run_state is None or run_state.get("run_id") != resume_run_id:
-            logger.warning(f"run_state.json mismatch. Creating fresh state for {resume_run_id}.")
-            run_state = None
+    _rates = _rates_for(provider)
 
     if run_state is None:
         run_id = resume_run_id or _generate_run_id()
@@ -120,6 +231,7 @@ def _run_pipeline_batch(
             "batch_id": None,
             "batch_phase": "pending",
             "batch_results_path": None,
+            "model": model_info,
         }
         _save_run_state(run_state)
     else:
@@ -172,7 +284,7 @@ def _run_pipeline_batch(
             batch_requests = [
                 build_batch_request(
                     custom_id=str(i),
-                    company_data={**cd, "model": model, "max_tokens": max_tokens, "temperature": temperature},
+                    company_data={**cd, "model": provider.model_name, "max_tokens": max_tokens, "temperature": temperature},
                 )
                 for i, cd in enumerate(company_data_list)
             ]
@@ -220,6 +332,7 @@ def _run_pipeline_batch(
         provider=provider,
         rates=_rates,
     )
+    _check_model_drift(provider)
     logger.info(f"Phase 3 complete. {len(agent1_outputs)} Agent 1 results ready.")
 
     # ------------------------------------------------------------------
@@ -256,6 +369,7 @@ def _run_pipeline_batch(
         except Exception as exc:
             logger.error(f"Unhandled error in Phase 4 for '{name}': {exc}", exc_info=True)
             result = _error_result(name)
+        _check_model_drift(provider)
 
         t_end = time.time()
         result["processing_time_s"] = round(t_end - t_start, 2)
@@ -373,6 +487,7 @@ def _phase1_gather(
             continue
         logger.info(f"[{i+1}/{total}] Phase 1: {company['company_name']}")
         record = _gather_one(company, **gather_kwargs)
+        _check_model_drift(gather_kwargs.get("provider"))
         _append_jsonl(record, gathered_path)
         result.append(record)
 
@@ -414,6 +529,9 @@ def _phase3_parse(
                 validate_classification_result(parsed)
                 # Extract usage from batch result
                 usage = message.get("usage", {})
+                parsed["model"] = message.get("model") or ""
+                if provider is not None and parsed["model"]:
+                    provider.note_model(parsed["model"])
                 parsed["classifier_input_tokens"] = usage.get("input_tokens", 0)
                 parsed["classifier_output_tokens"] = usage.get("output_tokens", 0)
                 parsed["classifier_cache_read_tokens"] = usage.get("cache_read_input_tokens", 0)
@@ -548,6 +666,9 @@ def _finalize_one(
         + (validator_searches + enrichment_searches) * web_search_rate
     )
 
+    if not cost_known(rates):
+        total_cost_usd = None  # no listed price: shown as unknown, never guessed
+
     agent2_flags = agent2.get("flags", []) if agent2 else []
     classifier_flags = agent1.get("classifier_flags", [])
     merged_flags = list({*classifier_flags, *agent2_flags})
@@ -596,6 +717,12 @@ def _finalize_one(
         "enrichment_input_tokens": enrichment_input_tokens,
         "enrichment_output_tokens": enrichment_output_tokens,
         "total_cost_usd": total_cost_usd,
+        # The model the API reported for the classifier call.
+        "model": (
+            agent1.get("model")
+            or getattr(provider, "reported_model", None)
+            or getattr(provider, "model_name", "")
+        ),
     }
 
 
@@ -608,6 +735,9 @@ def _run_pipeline_sequential(
     config: Dict[str, Any],
     output_path: str,
     resume_run_id: Optional[str],
+    provider,
+    run_state: Optional[Dict[str, Any]],
+    model_info: Dict[str, Any],
 ) -> List[Dict[str, Any]]:
     pipeline_cfg = config.get("pipeline", {})
     val_cfg = config.get("validation", {})
@@ -625,8 +755,7 @@ def _run_pipeline_sequential(
     epo_key = os.getenv("EPO_KEY")
     epo_secret = os.getenv("EPO_SECRET")
 
-    provider = build_provider(config)
-    _rates = get_cost_rates(provider.model_name)
+    _rates = _rates_for(provider)
 
     run_id = resume_run_id or _generate_run_id()
     done: Dict[int, Dict[str, Any]] = {}
@@ -634,13 +763,14 @@ def _run_pipeline_sequential(
     if resume_run_id:
         done = _load_llm_checkpoint(resume_run_id, companies)
         logger.info(f"Resuming sequential run {resume_run_id}: {len(done)} done.")
-    else:
+    if run_state is None:
         run_state = {
             "run_id": run_id,
             "created_at": datetime.now().isoformat(),
             "batch_id": None,
             "batch_phase": "complete",  # sequential runs skip batch phases
             "batch_results_path": None,
+            "model": model_info,
         }
         _save_run_state(run_state)
 
@@ -674,6 +804,7 @@ def _run_pipeline_sequential(
         except Exception as exc:
             logger.error(f"Unhandled error processing '{name}': {exc}", exc_info=True)
             result = _error_result(name)
+        _check_model_drift(provider)
 
         t_end = time.time()
         result["processing_time_s"] = round(t_end - t_start, 2)
@@ -882,14 +1013,18 @@ def _log_run_summary(results: List[Dict[str, Any]]) -> None:
         r.get("classifier_cache_creation_tokens", 0) + r.get("validator_cache_creation_tokens", 0)
         for r in results
     )
-    total_cost = sum(r.get("total_cost_usd", 0.0) for r in results)
+    costs = [r.get("total_cost_usd", 0.0) for r in results]
+    cost_text = (
+        "unknown (no price listed for this model; see token counts above)"
+        if any(c is None for c in costs) else f"${sum(costs):.4f}"
+    )
     logger.info("=== Run Summary ===")
     logger.info(f"Companies processed:        {len(results)}")
     logger.info(f"Total input tokens:         {total_in}")
     logger.info(f"Total output tokens:        {total_out}")
     logger.info(f"Cache read tokens:          {total_cache_read}")
     logger.info(f"Cache creation tokens:      {total_cache_creation}")
-    logger.info(f"Estimated cost:             ${total_cost:.4f}")
+    logger.info(f"Estimated cost:             {cost_text}")
 
 
 def _error_result(company_name: str) -> Dict[str, Any]:
@@ -940,4 +1075,5 @@ def _error_result(company_name: str) -> Dict[str, Any]:
         "enrichment_input_tokens": 0,
         "enrichment_output_tokens": 0,
         "total_cost_usd": 0.0,
+        "model": "",
     }
