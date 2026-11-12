@@ -11,6 +11,8 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+from pipeline import models as _models
+
 logger = logging.getLogger(__name__)
 
 
@@ -136,7 +138,7 @@ def write_results(
     _write_overview_sheet(wb, results, run_stats)
     _write_management_sheet(wb, results, companies)
     _write_detail_sheet(wb, results_df)
-    _write_legend_sheet(wb)
+    _write_legend_sheet(wb, run_stats.get("model"))
     wb.save(output_path)
 
     logger.info(f"Results written to {output_path}")
@@ -345,6 +347,7 @@ def _write_overview_sheet(
             ("Total Runtime", run_stats.get("total_runtime_s", "N/A")),
         ]),
         ("Model", _model_metrics(run_stats.get("model") or {})),
+        ("Cost", _cost_metrics(results, run_stats.get("model") or {})),
     ]
 
     style_group_header = Font(bold=True, size=12)
@@ -398,6 +401,60 @@ def _model_metrics(model: Dict[str, Any]) -> List[tuple]:
     if model.get("search_model"):
         metrics.append(("Web-Search Model", model["search_model"]))
     return metrics
+
+
+_TOKEN_COLUMNS = [
+    "classifier_input_tokens", "validator_input_tokens", "enrichment_input_tokens",
+    "classifier_output_tokens", "validator_output_tokens", "enrichment_output_tokens",
+]
+
+
+def _cost_metrics(results: List[Dict[str, Any]], model: Dict[str, Any]) -> List[tuple]:
+    """Overview rows for token totals and the cost estimate."""
+    def total(columns):
+        return sum((r.get(c) or 0) for r in results for c in columns)
+
+    costs = [r.get("total_cost_usd", 0.0) for r in results]
+    if any(c is None for c in costs):
+        name = model.get("reported") or model.get("requested") or "this model"
+        cost = f"unknown (no price for {name})"
+    else:
+        cost = f"${sum(costs):.4f}"
+    return [
+        ("Total Input Tokens", total(_TOKEN_COLUMNS[:3])),
+        ("Total Output Tokens", total(_TOKEN_COLUMNS[3:])),
+        ("Estimated Cost (USD)", cost),
+    ]
+
+
+def _cost_legend(model: Optional[Dict[str, Any]]) -> str:
+    """Describe how total_cost_usd was computed for the model that produced the file."""
+    base = "Estimated cost for all three agents (Agent 0 enrichment + Agent 1 classifier + Agent 2 validator): "
+    model = model or {}
+    requested = model.get("requested")
+    rates = None
+    for name in (requested, model.get("reported")):
+        if name:
+            rates = _models.COST_RATES.get(name) or _models.COST_RATES.get(_models.base_model_id(name))
+        if rates:
+            break
+    if rates:
+        search = rates.get("web_search")
+        search_text = f" + ${search:.3f} per web search" if search else ""
+        return (
+            f"{base}input tokens × ${rates['input'] * 1e6:.2f}/1M + output tokens × "
+            f"${rates['output'] * 1e6:.2f}/1M ({name} rates){search_text}. "
+            "Batch classifier calls are billed at half the token rates"
+        )
+    if requested:
+        return (
+            f"{base}blank because no price is listed for {model.get('reported') or requested} "
+            "in pipeline/models.py. Use the token columns to work the cost out"
+        )
+    return (
+        f"{base}tokens × the model's listed per-token rates + the provider's fee per web search "
+        "(rates are in pipeline/models.py); blank when the model has no listed price"
+    )
 
 
 def _write_management_sheet(
@@ -524,7 +581,7 @@ def _write_detail_sheet(wb, results_df: pd.DataFrame) -> None:
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 
-def _write_legend_sheet(wb) -> None:
+def _write_legend_sheet(wb, model: Optional[Dict[str, Any]] = None) -> None:
     """Add a Legend sheet explaining column values."""
     if "Legend" not in wb.sheetnames:
         wb.create_sheet("Legend")
@@ -629,9 +686,7 @@ def _write_legend_sheet(wb) -> None:
          "Token count returned by Agent 0 across all turns"),
         ("total_cost_usd", "Full Detail",
          "float (USD)",
-         "Estimated cost for all three agents (Agent 0 enrichment + Agent 1 classifier + Agent 2 validator): "
-         "tokens × the configured model's per-token rates + the provider's fee per web search "
-         "(rates are listed in pipeline/models.py)"),
+         _cost_legend(model)),
         ("model", "Full Detail",
          "string",
          "Model ID the API reported for this company's classifier call; empty on error. "

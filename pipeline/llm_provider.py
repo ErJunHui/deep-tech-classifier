@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pipeline import model_resolver, models
 from pipeline.json_utils import extract_json as _extract_json
-from pipeline.models import COST_RATES, DEFAULT_RATES as _DEFAULT_RATES
+from pipeline.models import COST_RATES
 
 logger = logging.getLogger(__name__)
 
@@ -728,16 +728,32 @@ class OpenAIProvider(LLMProvider):
 BATCH_DISCOUNT = 0.5
 
 
-def get_cost_rates(model: str) -> Dict[str, float]:
-    """Return cost rates for a model (USD per token). Falls back to defaults."""
-    if model in COST_RATES:
-        return COST_RATES[model]
-    # Prefix/substring match
-    for key in COST_RATES:
-        if model.startswith(key) or key.startswith(model):
-            return COST_RATES[key]
-    logger.warning(f"No cost rates found for model '{model}', using defaults.")
-    return _DEFAULT_RATES
+_warned_unpriced: set = set()
+
+
+def get_cost_rates(model: str) -> Dict[str, Any]:
+    """
+    Cost rates for a model (USD per token).
+
+    Only the exact model, or a dated snapshot of it, is priced. Any other model
+    gets models.UNKNOWN_RATES: another model's rates are never borrowed, because
+    prices differ by 10x within a family.
+    """
+    rates = COST_RATES.get(model) or COST_RATES.get(models.base_model_id(model))
+    if rates is not None:
+        return rates
+    if model not in _warned_unpriced:
+        _warned_unpriced.add(model)
+        logger.warning(
+            f"No price is listed for model '{model}' in pipeline/models.py. "
+            "Its cost will be shown as unknown."
+        )
+    return dict(models.UNKNOWN_RATES)
+
+
+def cost_known(rates: Dict[str, Any]) -> bool:
+    """False when the rates are the placeholder for an unpriced model."""
+    return bool(rates.get("known", True))
 
 
 # ---------------------------------------------------------------------------

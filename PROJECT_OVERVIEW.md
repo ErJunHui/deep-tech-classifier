@@ -143,6 +143,18 @@ deep_tech_classifier/
 | **Cost tracking** | Token counts and USD cost tracked per company and reported in output |
 | **Management-ready output** | Colour-coded Excel with plain-English verdicts and action flags for non-technical reviewers |
 | **Domain coherence check** | Detects and discards EPO results from the wrong company (name collision detection) |
+| **Model tracking** | The model is chosen from a tier at startup, locked for the run, and named in every output file |
+
+### The classifier model changes over time
+
+AI providers retire models and release new ones, so the model behind a tier is not fixed. A verdict from this year's model may differ from next year's on borderline companies. The pipeline handles this in four ways:
+
+- **Tested models only.** A tier resolves to a model from a short list that has been run through this pipeline, not to whatever the provider released most recently.
+- **One model per run.** The model is chosen once at startup and reused on `--resume`. If the provider starts answering with a different model partway through, the run stops.
+- **Every output names its model.** The Overview sheet shows the model requested and the one the provider reported; the Full Detail sheet records it per company.
+- **A reference check.** Twenty companies with known verdicts are re-run whenever the model changes, and the pipeline warns at startup if the current model has not passed it.
+
+For work that must be reproducible, pin an exact model in `config.json` (see the README).
 
 ---
 
@@ -237,7 +249,8 @@ EPO_SECRET=...                   # EPO OPS API consumer secret
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `llm.model` | `claude-haiku-5-5` | AI model used for all three agents |
+| `llm.tier` | `fast` | `fast`, `balanced` or `best`; the pipeline picks the model for all three agents |
+| `llm.model` | `null` | Set an exact model name to pin it instead of using the tier |
 | `validation.validator_threshold` | `70` | Confidence below this triggers Agent 2 |
 | `validation.max_web_searches` | `3` | Max web searches per Agent 2 call |
 | `validation.override_min_confidence` | `65` | Agent 2 override accepted only at or above this |
@@ -274,7 +287,7 @@ python classify.py --help
 
 | Component | Technology |
 |-----------|-----------|
-| AI classification | Claude Haiku (`claude-haiku-5-5` by default) via Anthropic API |
+| AI classification | Claude via Anthropic API by default (Haiku on the `fast` tier); Gemini and OpenAI also supported |
 | Batch processing | Anthropic Message Batches API |
 | Web search (Agents 0 & 2) | Anthropic web search tool (Claude tool use) |
 | Patent data | EPO Open Patent Services (OPS) API |

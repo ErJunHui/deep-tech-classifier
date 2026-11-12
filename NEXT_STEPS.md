@@ -138,39 +138,41 @@ Open questions carried over:
 
 **Done when:** an interrupted run resumed after a new model release still uses the original model, and every output file names the model the API reported.
 
-## Step 5: Add a reference set to catch drift
+## Step 5: Add a reference set to catch drift (built; first live check still to run)
 
 Do this before making tier the default. It is the only check that a newly added candidate classifies the same way as the old one.
 
-- [ ] Pick 15–20 companies whose correct verdict is certain, with a mix of deep tech and general tech, and some borderline cases.
-- [ ] Save them as `tests/reference/companies.xlsx` with an `expected_verdict` column.
-- [ ] Add a script (e.g. `python -m tests.reference.check`) that runs the pipeline on them and reports agreement and any changed verdicts.
-- [ ] Decide the pass threshold up front (e.g. all certain cases correct, at most one borderline case changed). Web search makes verdicts vary between runs, so run the current model two or three times first to see how much it varies on its own.
-- [ ] Store the last model that passed in `tests/reference/last_validated.json`, one entry per provider. For Gemini, store the reported version, not the alias.
-- [ ] At startup, if the resolved model differs from the last validated one for that provider, print a warning suggesting the user run the check.
-- [ ] Rule for `pipeline/models.py`: a model is added to a candidate list only after it passes the check.
-- [ ] Once the check exists and passes, change `config.template.json` to `"model": null, "tier": "fast"`.
+- [x] Starter list of 20 companies: 8 clear deep tech, 8 clear general tech, 4 borderline.
+- [ ] Review the list and the expected verdicts. They are a first proposal and should reflect your own reading of the criteria.
+- [x] Save them as `tests/reference/companies.xlsx` with `expected_verdict` and `case_type` (`certain` / `borderline`) columns.
+- [x] Add a script (e.g. `python -m tests.reference.check`) that runs the pipeline on them and reports agreement and any changed verdicts.
+- [x] Decide the pass threshold up front (e.g. all certain cases correct, at most one borderline case changed). Web search makes verdicts vary between runs, so run the current model two or three times first to see how much it varies on its own.
+- [x] Store the last model that passed in `tests/reference/last_validated.json`, one entry per provider. For Gemini, store the reported version, not the alias.
+- [x] At startup, if the resolved model differs from the last validated one for that provider, print a warning suggesting the user run the check.
+- [x] Rule for `pipeline/models.py`: a model is added to a candidate list only after it passes the check (documented in the README).
+- [ ] Run `python -m tests.reference.check --runs 3` on each Anthropic tier and commit `tests/reference/last_validated.json`. Until then every run prints the "not validated" warning.
+- [x] `config.template.json` now has `"model": null, "tier": "fast"`. This was switched before the first live check passed; today it resolves to the same model the template pinned before (`claude-haiku-5-5`).
 
 **Done when:** switching to a new model triggers a visible prompt to re-validate, the check gives a clear pass/fail, and the template no longer names a model.
 
-## Step 6: Make cost estimates honest
+## Step 6: Make cost estimates honest (done)
 
 Family-level pricing is not safe: Haiku 4.5 costs $1 / $5 per million tokens and Haiku 5.5 costs $0.10 / $0.50, so a "any haiku" fallback would be off by 10x.
 
-- [ ] Keep prices per exact model, stored next to the model's profile in `pipeline/models.py`. Adding a candidate then means adding its price.
-- [ ] When the model is not in the table (a pinned model, or a Gemini alias pointing at a new version), show the cost as "unknown (no price for <model>)" in the run summary and Overview sheet, with token counts so the user can work it out. Do not fall back to another model's rates.
-- [ ] Replace the loose match in `get_cost_rates` (`model.startswith(key) or key.startswith(model)`) with an exact match plus the dated-snapshot form of the same model.
-- [ ] Fix the legend in `data/writer.py`, which says $0.80 / $4.00 while the table says $1 / $5, and generate it from the resolved model's rates.
+- [x] Keep prices per exact model, stored next to the model's profile in `pipeline/models.py`. Adding a candidate then means adding its price.
+- [x] When the model is not in the table (a pinned model, or a Gemini alias pointing at a new version), show the cost as "unknown (no price for <model>)" in the run summary and Overview sheet, with token counts so the user can work it out. Do not fall back to another model's rates.
+- [x] Replace the loose match in `get_cost_rates` (`model.startswith(key) or key.startswith(model)`) with an exact match plus the dated-snapshot form of the same model.
+- [x] Fix the legend in `data/writer.py`, which says $0.80 / $4.00 while the table says $1 / $5, and generate it from the resolved model's rates.
 
 **Done when:** a model without a price shows "unknown" with its token counts, and no cost figure is ever computed from another model's rates.
 
-## Step 7: Update documentation
+## Step 7: Update documentation (done)
 
-- [ ] `README.md`: replace the `llm.model` row with `llm.tier` and `llm.model`, and update the "LLM providers" table to show tiers instead of example model names.
-- [ ] Explain when to pin a model: audits, reports that will be compared over time, or reproducing an earlier run.
-- [ ] Document how to add a new model: add its profile and price, run the reference check, then add it to the front of the tier's candidate list.
-- [ ] Document the reference check and when to run it.
-- [ ] `PROJECT_OVERVIEW.md`: note that the classifier model can change over time and how this is tracked.
+- [x] `README.md`: replace the `llm.model` row with `llm.tier` and `llm.model`, and update the "LLM providers" table to show tiers instead of example model names.
+- [x] Explain when to pin a model: audits, reports that will be compared over time, or reproducing an earlier run.
+- [x] Document how to add a new model: add its profile and price, run the reference check, then add it to the front of the tier's candidate list.
+- [x] Document the reference check and when to run it.
+- [x] `PROJECT_OVERVIEW.md`: note that the classifier model can change over time and how this is tracked.
 
 **Done when:** a new user can set up the pipeline without knowing any model names, and a maintainer can add a model by following the README.
 
@@ -186,4 +188,4 @@ Family-level pricing is not safe: Haiku 4.5 costs $1 / $5 per million tokens and
 | 6    | ~1 hour | Low |
 | 7    | ~1 hour | Low |
 
-Steps 1–4 make the pipeline survive a model retirement while the template stays pinned. Step 5 is required before tier becomes the default. Steps 6–7 can follow over the next few days.
+All seven steps are implemented. What remains is live confirmation: the unchecked items under Steps 2, 3 and 5.

@@ -36,3 +36,6 @@ venv/
 *.backup-*
 *.bak
 .claude/settings.local.json
+
+# The reference set is test data, not a run output
+!tests/reference/companies.xlsx

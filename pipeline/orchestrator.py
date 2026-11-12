@@ -24,8 +24,8 @@ from typing import Dict, Any, List, Optional
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
-from pipeline import models
-from pipeline.llm_provider import build_provider, get_cost_rates, BATCH_DISCOUNT
+from pipeline import models, validation_record
+from pipeline.llm_provider import build_provider, get_cost_rates, cost_known, BATCH_DISCOUNT
 from pipeline.model_resolver import ModelSetupError
 from agents.classifier_agent import (
     classify as agent1_classify,
@@ -67,6 +67,7 @@ def run_pipeline(
     run_state = _load_matching_run_state(resume_run_id)
     provider = _start_provider(config, run_state)
     model_info = _model_info(provider, run_state)
+    _warn_if_unvalidated(model_info)
     if run_state is not None:
         run_state["model"] = model_info
         _save_run_state(run_state)
@@ -157,6 +158,14 @@ def _model_info(provider, run_state: Optional[Dict[str, Any]]) -> Dict[str, Any]
     }
 
 
+def _warn_if_unvalidated(model_info: Dict[str, Any]) -> None:
+    """Warn when the run's model is not the one that last passed the reference check."""
+    warning = validation_record.warning_for(
+        model_info.get("provider"), model_info.get("reported") or model_info.get("requested"))
+    if warning:
+        logger.warning(warning)
+
+
 def _check_model_drift(provider) -> None:
     """Stop the run if a response came from a different model than the first one."""
     drift = getattr(provider, "model_drift", None)
@@ -170,7 +179,7 @@ def _check_model_drift(provider) -> None:
 
 
 def _rates_for(provider) -> Dict[str, float]:
-    """Price by the configured model; for an alias, by the version the API reported."""
+    """Price by the configured model; for an unlisted alias, by the version the API reported."""
     name = provider.model_name
     if not models.has_profile(name):
         name = getattr(provider, "reported_model", None) or name
@@ -657,6 +666,9 @@ def _finalize_one(
         + (validator_searches + enrichment_searches) * web_search_rate
     )
 
+    if not cost_known(rates):
+        total_cost_usd = None  # no listed price: shown as unknown, never guessed
+
     agent2_flags = agent2.get("flags", []) if agent2 else []
     classifier_flags = agent1.get("classifier_flags", [])
     merged_flags = list({*classifier_flags, *agent2_flags})
@@ -1001,14 +1013,18 @@ def _log_run_summary(results: List[Dict[str, Any]]) -> None:
         r.get("classifier_cache_creation_tokens", 0) + r.get("validator_cache_creation_tokens", 0)
         for r in results
     )
-    total_cost = sum(r.get("total_cost_usd", 0.0) for r in results)
+    costs = [r.get("total_cost_usd", 0.0) for r in results]
+    cost_text = (
+        "unknown (no price listed for this model; see token counts above)"
+        if any(c is None for c in costs) else f"${sum(costs):.4f}"
+    )
     logger.info("=== Run Summary ===")
     logger.info(f"Companies processed:        {len(results)}")
     logger.info(f"Total input tokens:         {total_in}")
     logger.info(f"Total output tokens:        {total_out}")
     logger.info(f"Cache read tokens:          {total_cache_read}")
     logger.info(f"Cache creation tokens:      {total_cache_creation}")
-    logger.info(f"Estimated cost:             ${total_cost:.4f}")
+    logger.info(f"Estimated cost:             {cost_text}")
 
 
 def _error_result(company_name: str) -> Dict[str, Any]:

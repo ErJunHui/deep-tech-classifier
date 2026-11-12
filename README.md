@@ -99,7 +99,7 @@ Results are written to `<input name>_classified_<timestamp>.xlsx` with four shee
 
 | Sheet | Contents |
 |---|---|
-| Overview | Totals, confidence breakdown, escalations and run details. |
+| Overview | Totals, confidence breakdown, escalations, run details, the model that produced the file, token totals and estimated cost. |
 | Management View | One row per company: verdict, the three criteria, confidence, risk flag and action. Cases needing review are listed first. |
 | Full Detail | Every original column plus all pipeline fields, including reasoning, patent data, validator findings, token counts and cost. |
 | Legend | What every column, colour and label means. |
@@ -135,11 +135,11 @@ All settings live in `config.json`. Defaults below are those in `config.template
 | Field | Default | Description |
 |---|---|---|
 | `provider` | `"anthropic"` | `"anthropic"`, `"gemini"` or `"openai"` |
-| `model` | `"claude-haiku-5-5"` | Pins an exact model; must belong to the provider. Set to `null` to let `tier` choose |
-| `tier` | `"fast"` | `"fast"`, `"balanced"` or `"best"`. Used only when `model` is `null`: picks the first tested model for the tier that the provider still serves |
+| `tier` | `"fast"` | `"fast"`, `"balanced"` or `"best"`. The pipeline picks the model for you; see [LLM providers](#llm-providers) |
+| `model` | `null` | Leave as `null` to use `tier`. Set an exact model name to pin it; `tier` is then ignored. See [Pinning a model](#pinning-a-model) |
 | `max_tokens_classifier` | `2000` | Max output tokens for the classifier |
 | `max_tokens_validator` | `2000` | Max output tokens for the validator |
-| `temperature` | `0.1` | Sampling temperature |
+| `temperature` | `0.1` | Sampling temperature. Not sent to models that do not accept it |
 | `max_retries_on_parse_error` | `2` | Retries when the classifier returns invalid JSON |
 
 ### `enrichment`
@@ -182,13 +182,68 @@ All settings live in `config.json`. Defaults below are those in `config.template
 
 ## LLM providers
 
-| Provider | Example models | Batch mode | Web search |
-|---|---|---|---|
-| `"anthropic"` | `claude-haiku-5-5`, `claude-sonnet-5-5` | Yes | Anthropic web search tool |
-| `"gemini"` | `gemini-2.5-flash`, `gemini-2.5-pro` | No | Google Search grounding |
-| `"openai"` | `gpt-4o-mini`, `gpt-4o` | No | `gpt-4o-search-preview` |
+Choose a provider and a tier. You do not need to know any model names.
+
+| Provider | `fast` | `balanced` | `best` | Batch mode | Web search |
+|---|---|---|---|---|---|
+| `"anthropic"` | Haiku | Sonnet | Opus | Yes | Anthropic web search tool |
+| `"gemini"` | Flash-Lite | Flash | Pro | No | Google Search grounding |
+| `"openai"` | GPT-4o mini | GPT-4o | GPT-4o | No | Dedicated search model |
 
 With Gemini or OpenAI, `batch.enabled` is ignored and companies are processed one at a time.
+
+### How the model is chosen
+
+Each tier has a short list of models that have been run through this pipeline, newest first. The lists are in `pipeline/models.py`.
+
+1. At startup the pipeline asks the provider which models it still serves and takes the first one on the tier's list. If a model is retired, the next one is used automatically.
+2. One small test call confirms the model answers before any company is processed.
+3. The model is saved with the run. `--resume` always continues with the same model, even if a newer one has since been added.
+4. The Overview sheet names the model, and the Full Detail sheet has a `model` column per row.
+
+Gemini tiers use Google's moving aliases (`gemini-flash-latest` and similar), which Google repoints to newer versions. The pipeline records the version that actually answered, and stops a run if that version changes partway through.
+
+If no model on the list is available, the run stops with a message listing what was tried and what the provider serves. Pin a model to continue.
+
+### Pinning a model
+
+Set `llm.model` to an exact model name when the output must be reproducible:
+
+- audits;
+- reports that will be compared with each other over time;
+- reproducing an earlier run (the model is on that run's Overview sheet).
+
+```json
+"llm": { "provider": "anthropic", "model": "claude-haiku-5-5" }
+```
+
+A pinned model that is not in `pipeline/models.py` still runs, with the original request settings. Its cost is shown as unknown.
+
+### Checking a model against the reference set
+
+`tests/reference/companies.xlsx` holds 20 companies with known verdicts: 16 clear cases and 4 borderline ones. The check runs the pipeline on them and compares the results:
+
+```bash
+python -m tests.reference.check
+```
+
+This makes real API calls using your `config.json` and `.env`. It passes when every clear case gets its expected verdict and at most one borderline case differs. On a pass, the model is saved in `tests/reference/last_validated.json`; commit that file.
+
+Run it:
+
+- when the pipeline warns at startup that the model differs from the last one validated;
+- before adding a model to a tier;
+- after changing the classifier or validator prompts.
+
+Web search makes verdicts vary a little between runs. `--runs 3` repeats the check and lists the companies whose verdict changed; `--sequential` skips batch mode for a faster result.
+
+Review the reference companies and their expected verdicts before trusting the check; they should reflect your own reading of the criteria.
+
+### Adding a new model
+
+1. Add a profile for it in `PROFILES` in `pipeline/models.py`: its request settings and its price.
+2. Pin it in `config.json` and run the reference check.
+3. If it passes, add it to the front of its tier's list in `CANDIDATES` and commit, with `last_validated.json`.
 
 To run without patent data or web search, turn the steps off:
 
@@ -200,7 +255,9 @@ To run without patent data or web search, turn the steps off:
 
 ## Cost
 
-The `total_cost_usd` column and the run summary are estimates from token and web-search counts, using the price table in `pipeline/llm_provider.py`. Check that table against your provider's current prices before relying on the figures; models not in the table fall back to a generic rate.
+The `total_cost_usd` column, the Overview sheet and the run summary are estimates from token and web-search counts, using the prices in `pipeline/models.py`. Check those prices against your provider's current ones before relying on the figures.
+
+Only models listed there are priced. For any other model the cost is shown as "unknown" and the token totals are given instead; another model's price is never substituted.
 
 Web searches (enrichment and validation) are usually the largest part of the bill. Lowering `validation.validator_threshold` or disabling `enrichment` reduces them.
 
@@ -225,7 +282,10 @@ agents/
 pipeline/
   orchestrator.py        Runs the steps, checkpoints and resume
   confidence.py          Confidence scoring and validator verdict rules
-  llm_provider.py        Anthropic / Gemini / OpenAI clients and price table
+  llm_provider.py        Anthropic / Gemini / OpenAI clients
+  models.py              Model lists per tier, request settings and prices
+  model_resolver.py      Chooses the model for a run from tier or pinned name
+  validation_record.py   Tracks which model last passed the reference check
   epo_bridge.py          Adapter to the bundled EPO package
   json_utils.py          Parsing JSON out of model responses
   settings.py            Loads config.json and .env
@@ -234,4 +294,5 @@ data/
   writer.py              Writes the Excel workbook
 lib/epo_patent/          Bundled EPO patent search package
 tests/                   Unit and regression tests
+  reference/             Reference companies and the live model check
 ```

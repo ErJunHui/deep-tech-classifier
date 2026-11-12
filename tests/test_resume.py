@@ -96,6 +96,8 @@ class ResumeTestCase(unittest.TestCase):
         self.classify = mock.Mock(side_effect=lambda **kw: _agent1())
         for target, repl in (
             ("build_provider", self.build),
+            ("_rates_for", lambda provider: {"input": 1e-6, "output": 5e-6,
+                                             "cache_write": 0.0, "cache_read": 0.0}),
             ("agent0_enrich", self.enrich),
             ("agent1_classify", self.classify),
         ):

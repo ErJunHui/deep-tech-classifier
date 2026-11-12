@@ -126,15 +126,17 @@ PROFILES: Dict[str, ModelProfile] = {
     "gpt-4o-search-preview": ModelProfile(rates=_rates(2.50, 10.00)),
 }
 
-# Applied when a model has no price (see get_cost_rates in llm_provider).
-DEFAULT_RATES: Dict[str, float] = _rates(1.00, 5.00)
+# Returned for a model with no listed price. Costs computed from it are zero,
+# and "known": False tells callers to show the cost as unknown instead.
+UNKNOWN_RATES: Dict[str, Any] = {**_rates(0.0, 0.0, web_search_per_1k=0.0), "known": False}
 
 # Kept in the shape llm_provider.get_cost_rates has always used.
 COST_RATES: Dict[str, Dict[str, float]] = {
     name: profile.rates for name, profile in PROFILES.items() if profile.rates is not None
 }
 
-_DATED_SNAPSHOT = re.compile(r"-\d{8}$")
+# Anthropic snapshots end in -YYYYMMDD, OpenAI snapshots in -YYYY-MM-DD.
+_DATED_SNAPSHOT = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})$")
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +159,7 @@ def pinned_model(config: Dict[str, Any]) -> Optional[str]:
 
 
 def base_model_id(model: str) -> str:
-    """A dated snapshot ID (…-20251001) without its date."""
+    """A dated snapshot ID (…-20251001, …-2024-08-06) without its date."""
     return _DATED_SNAPSHOT.sub("", model or "")
 
 
