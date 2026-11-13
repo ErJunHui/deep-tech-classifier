@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, FastAPI + uvicorn + python-multipart (new), httpx (tests only), existing pandas/openpyxl pipeline; frontend is plain ES modules and CSS, no bundler, with one vendored library (NumberFlow, for animated counters); tests are `unittest` (project convention) and `node --test` (Node 22) for pure frontend logic.
 
-**Spec:** `prototypes/frontend/index.html` loading `prototypes/frontend/variants/workbench.js` and `prototypes/frontend/data.js`. `index.html` wires in only the Workbench variant; `board.js`, `grid.js`, `guided.js`, `queue.js` and `split.js` are not loaded and are out of scope. Line references below (`workbench.js:NNN`) are to the prototype as it stands today.
+**Spec:** `prototypes/frontend/index.html` loading `prototypes/frontend/variants/workbench.js` and `prototypes/frontend/data.js`. `index.html` wires in only the Workbench variant; the other directions explored were removed once it was chosen. Line references below (`workbench.js:NNN`) are to the prototype as it stands today.
 
 ## Global Constraints
 
