@@ -165,5 +165,47 @@ class EstimateTest(unittest.TestCase):
         self.assertEqual(e["secs"], 0)
 
 
+class EstimateRequestTest(unittest.TestCase):
+    def test_request_with_defaults_and_rows(self):
+        self.assertEqual(est.estimate_request({"rows": 20}), estimate(clean_settings({}), 20))
+
+    def test_request_cleans_settings(self):
+        e = est.estimate_request({"settings": {"validatorThreshold": 999}, "rows": 5})
+        expected = estimate(clean_settings({"validatorThreshold": 100}), 5)
+        self.assertEqual(e, expected)
+
+    def test_request_rejects_bad_rows(self):
+        bad = [None, "5", "abc", True, False, -1, 2.7, float("inf"), float("-inf"),
+               float("nan"), [], {}, 10 ** 400]
+        for rows in bad:
+            with self.subTest(rows=rows):
+                with self.assertRaises(est.EstimateError):
+                    est.estimate_request({"rows": rows})
+        with self.assertRaises(est.EstimateError):
+            est.estimate_request({"settings": {}})
+
+    def test_request_accepts_whole_float_rows(self):
+        self.assertEqual(est.estimate_request({"rows": 12.0}), estimate(clean_settings({}), 12))
+        self.assertEqual(est.estimate_request({"rows": 0}), estimate(clean_settings({}), 0))
+
+    def test_request_rejects_unknown_provider_and_tier(self):
+        for raw in ({"provider": "nope"}, {"tier": "nope"}):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError) as expected:
+                    clean_settings(raw)
+                with self.assertRaises(est.EstimateError) as ctx:
+                    est.estimate_request({"settings": raw, "rows": 1})
+                self.assertEqual(str(ctx.exception), str(expected.exception))
+
+    def test_request_rejects_non_object_body(self):
+        for body in (None, [], "x", 5):
+            with self.subTest(body=body):
+                with self.assertRaises(est.EstimateError):
+                    est.estimate_request(body)
+
+    def test_estimate_error_is_a_value_error(self):
+        self.assertTrue(issubclass(est.EstimateError, ValueError))
+
+
 if __name__ == "__main__":
     unittest.main()

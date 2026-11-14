@@ -8,11 +8,12 @@ token columns in the Full Detail sheet of a real run.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, Tuple
 
 from pipeline import models
 from pipeline.llm_provider import BATCH_DISCOUNT, cost_known, get_cost_rates
-from webapp.settings_map import BATCH_PROVIDERS
+from webapp.settings_map import BATCH_PROVIDERS, clean_settings
 
 # Assumptions, to be recalibrated from a real run's Full Detail token columns.
 CLASSIFIER_TOKENS = (3000, 600)        # input, output per company
@@ -101,3 +102,47 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         "secs": secs,
         "parts": parts,
     }
+
+
+class EstimateError(ValueError):
+    """An estimate request that cannot be answered; the message says why."""
+
+
+def _whole_rows(rows: Any) -> int:
+    """rows as a non-negative int; a float is accepted only when it is whole."""
+    if isinstance(rows, bool) or not isinstance(rows, (int, float)):
+        raise EstimateError(f"rows must be a whole number, not {rows!r}")
+    if isinstance(rows, float):
+        if not math.isfinite(rows) or not rows.is_integer():
+            raise EstimateError(f"rows must be a whole number, not {rows!r}")
+        rows = int(rows)
+    if rows < 0:
+        raise EstimateError(f"rows must not be negative, not {rows!r}")
+    try:
+        float(rows)  # the estimate multiplies prices by rows
+    except OverflowError:
+        raise EstimateError("rows is too large") from None
+    return rows
+
+
+def estimate_request(body: Any) -> Dict[str, Any]:
+    """
+    The estimate for the raw JSON body of POST /api/estimate.
+
+    body["settings"] goes through clean_settings (missing means defaults);
+    body["rows"] is required.
+
+    Raises:
+        EstimateError: body is not an object, the provider or tier is unknown,
+            or rows is not a non-negative whole number.
+    """
+    if not isinstance(body, dict):
+        raise EstimateError("The request body must be a JSON object")
+    if "rows" not in body:
+        raise EstimateError("rows is required")
+    rows = _whole_rows(body["rows"])
+    try:
+        settings = clean_settings(body.get("settings", {}))
+    except ValueError as exc:
+        raise EstimateError(str(exc)) from exc
+    return estimate(settings, rows)
