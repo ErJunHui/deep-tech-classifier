@@ -59,6 +59,22 @@ class ManagementViewTests(unittest.TestCase):
         self.assertEqual((row["Company Name"], row["UEN"]), ("Acme", "U1"))
 
 
+class OverviewSheetTests(unittest.TestCase):
+    def test_confidence_tier_counts_at_the_boundaries(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Overview"
+        results = [{"classification": "deep tech", "confidence": c} for c in (75, 74, 50, 49, None)]
+        results.append({"classification": "error", "confidence": 90})  # errors are not counted
+        writer._write_overview_sheet(wb, results, {})
+        values = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(1, ws.max_row + 1)}
+        self.assertEqual(
+            [values["High Confidence (≥75)"], values["Medium Confidence (50–74)"], values["Low Confidence (<50)"]],
+            ["1 (16.7%)", "2 (33.3%)", "2 (33.3%)"],
+        )
+
+
 class EpoBridgeTests(unittest.TestCase):
     def test_relative_package_dir_is_resolved_from_project_root(self):
         expected = str(ROOT / "lib" / "epo_patent")

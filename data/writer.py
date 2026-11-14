@@ -289,9 +289,10 @@ def _write_overview_sheet(
     non_error = max(1, total - errors)
 
     confidences = [r.get("confidence", 0) or 0 for r in results if r.get("classification") != "error"]
-    high_conf = sum(1 for c in confidences if c >= 75)
-    med_conf = sum(1 for c in confidences if 50 <= c < 75)
-    low_conf = sum(1 for c in confidences if c < 50)
+    tiers = [_review.confidence_tier(c) for c in confidences]
+    high_conf = tiers.count("High")
+    med_conf = tiers.count("Medium")
+    low_conf = tiers.count("Low")
     escalations = sum(1 for r in results if r.get("validation_decision") == "ESCALATE_FOR_HUMAN_REVIEW")
     disputed = sum(1 for r in results if r.get("classification_disputed"))
 
