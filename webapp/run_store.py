@@ -15,6 +15,7 @@ import re
 import shutil
 import tempfile
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -27,6 +28,12 @@ _RUN_ID = re.compile(r"run_[0-9_]+")
 _PIPELINE_RUN_ID = re.compile(r"[A-Za-z0-9_-]+")
 
 _SUBFOLDERS = ("input", "checkpoints", "logs", "output")
+
+# On Windows os.replace fails while the target is open for reading. Readers of
+# meta.json in this process take RunStore's lock; this retry is for anything
+# else holding a file briefly (another process, a virus scanner).
+_REPLACE_ATTEMPTS = 50
+_REPLACE_WAIT_S = 0.02
 
 
 def _now() -> datetime:
@@ -67,7 +74,14 @@ def _write_json_atomic(path: Path, value: Any) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(value, f, indent=2, ensure_ascii=False)
-        os.replace(tmp_name, path)
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp_name, path)
+                break
+            except PermissionError:
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_WAIT_S)
     except BaseException:
         try:
             os.unlink(tmp_name)
@@ -90,8 +104,14 @@ class RunStore:
     def __init__(self, root: Path, project_root: Path):
         self.root = Path(root)
         self.project_root = Path(project_root)
-        self._lock = threading.Lock()
+        # Held by meta writers and readers: on Windows a reader with meta.json
+        # open makes the writer's os.replace fail, and a read during the
+        # replace fails too. Re-entrant because update_meta reads the meta.
+        self._lock = threading.RLock()
         self._companies: Dict[str, List[Dict[str, Any]]] = {}
+        # Last pipeline run id read from each run's run_state.json, for when
+        # the pipeline is rewriting that file in place and it reads as empty.
+        self._pipeline_run_ids: Dict[str, str] = {}
 
     # --- folders and meta ---
 
@@ -163,7 +183,8 @@ class RunStore:
 
     def get_meta(self, run_id: str) -> Dict[str, Any]:
         """The run's meta.json. Raises KeyError for an unknown or unreadable run."""
-        meta = _read_json(self.run_dir(run_id) / "meta.json")
+        with self._lock:
+            meta = _read_json(self.run_dir(run_id) / "meta.json")
         if not isinstance(meta, dict):
             raise KeyError(run_id)
         return meta
@@ -212,11 +233,17 @@ class RunStore:
         ({row index: pipeline result}, lines consumed) from the pipeline's LLM checkpoint.
 
         Last write wins and rows that ended in an error are kept. Lines that do
-        not parse are skipped but counted; a torn last line is neither.
+        not parse are skipped but counted; a torn last line is neither. While
+        run_state.json is unreadable (the pipeline rewrites it in place), the
+        pipeline run id last read for this run is used.
         """
         pipeline_run_id = self._run_state(run_id).get("run_id")
-        if not isinstance(pipeline_run_id, str) or not _PIPELINE_RUN_ID.fullmatch(pipeline_run_id):
-            return {}, 0
+        if isinstance(pipeline_run_id, str) and _PIPELINE_RUN_ID.fullmatch(pipeline_run_id):
+            self._pipeline_run_ids[run_id] = pipeline_run_id
+        else:
+            pipeline_run_id = self._pipeline_run_ids.get(run_id)
+            if pipeline_run_id is None:
+                return {}, 0
         path = self.run_dir(run_id) / "checkpoints" / "llm" / f"llm_progress_{pipeline_run_id}.jsonl"
         results: Dict[int, Dict[str, Any]] = {}
         consumed = 0

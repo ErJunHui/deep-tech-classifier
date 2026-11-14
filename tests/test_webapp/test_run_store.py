@@ -3,6 +3,7 @@
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -184,6 +185,77 @@ class RunStoreTest(unittest.TestCase):
         self.assertEqual(steps, {0: "Patent lookup", 1: "Classification"})
         self.assertEqual(phase, "Batch job · 2 of 5")
         self.assertEqual(path.read_bytes(), before)
+
+    def test_read_results_survives_run_state_rewrite(self):
+        run_id = self._create()["id"]
+        self._write_run_state(run_id)
+        self._checkpoint(run_id).write_text(self._line(0, "deep tech", "Alpha"), encoding="utf-8")
+        self.assertEqual(sorted(self.store.read_results(run_id)[0]), [0])
+        # The pipeline rewrites run_state.json in place: momentarily empty or torn.
+        state = self.store.run_dir(run_id) / "checkpoints" / "run_state.json"
+        for torn in ("", '{"run_id": "R'):
+            with self.subTest(torn=torn):
+                state.write_text(torn, encoding="utf-8")
+                results, consumed = self.store.read_results(run_id)
+                self.assertEqual((sorted(results), consumed), ([0], 1))
+        # A readable state naming a new pipeline run switches to it.
+        self._write_run_state(run_id, "R2")
+        self.assertEqual(self.store.read_results(run_id), ({}, 0))
+        # Another run never borrows this run's pipeline id.
+        other = self._create()["id"]
+        (self.store.run_dir(other) / "checkpoints" / "run_state.json").write_text("", encoding="utf-8")
+        self.assertEqual(self.store.read_results(other), ({}, 0))
+
+    def test_meta_write_retries_while_a_reader_holds_the_file(self):
+        meta = self._create()
+        real_replace = run_store.os.replace
+        calls = []
+
+        def flaky_replace(src, dst):
+            calls.append(dst)
+            if len(calls) <= 2:
+                raise PermissionError(13, "The process cannot access the file")
+            real_replace(src, dst)
+
+        with mock.patch.object(run_store.os, "replace", side_effect=flaky_replace):
+            self.store.update_meta(meta["id"], status="stopped")
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.store.get_meta(meta["id"])["status"], "stopped")
+
+        # A file that stays locked still fails, without leaving a temp file behind.
+        folder = self.store.run_dir(meta["id"])
+        listing = sorted(p.name for p in folder.iterdir())
+        with mock.patch.object(run_store.os, "replace", side_effect=PermissionError(13, "locked")), \
+                mock.patch.object(run_store.time, "sleep"):
+            with self.assertRaises(PermissionError):
+                self.store.update_meta(meta["id"], status="failed")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), listing)
+        self.assertEqual(self.store.get_meta(meta["id"])["status"], "stopped")
+
+    def test_meta_writes_and_reads_concurrently(self):
+        run_id = self._create()["id"]
+        errors = []
+        done = threading.Event()
+
+        def read():
+            while not done.is_set():
+                try:
+                    self.store.get_meta(run_id)
+                except Exception as exc:  # noqa: BLE001 - collected for the assertion
+                    errors.append(exc)
+
+        readers = [threading.Thread(target=read) for _ in range(3)]
+        for t in readers:
+            t.start()
+        try:
+            for n in range(50):
+                self.store.update_meta(run_id, pid=n)
+        finally:
+            done.set()
+            for t in readers:
+                t.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(self.store.get_meta(run_id)["pid"], 49)
 
     def test_update_meta_is_atomic_replace(self):
         meta = self._create()
