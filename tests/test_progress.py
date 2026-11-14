@@ -131,6 +131,113 @@ class SequentialEmitTests(ProgressTestCase):
         )
 
 
+_BATCH_TEXT = json.dumps({
+    "classification": "deep tech", "confidence": 80, "reasoning": "r",
+    "criteria": {
+        k: {"met": True, "reasoning": "r"}
+        for k in ("innovation", "scientific_foundation", "proprietary_ip")
+    },
+})
+
+
+class _FakeBatches:
+    """Stands in for client.beta.messages.batches; rows in `failed` come back errored."""
+
+    def __init__(self, failed=()):
+        self.created = []
+        self.failed = {str(i) for i in failed}
+
+    def create(self, requests):
+        self.created.append(requests)
+        return SimpleNamespace(id="batch_1")
+
+    def retrieve(self, batch_id):
+        return SimpleNamespace(processing_status="ended", request_counts={})
+
+    def results(self, batch_id):
+        for req in self.created[-1]:
+            if req["custom_id"] in self.failed:
+                result = {"type": "errored", "error": {"type": "server_error"}}
+            else:
+                result = {"type": "succeeded", "message": {
+                    "content": [{"type": "text", "text": _BATCH_TEXT}],
+                    "usage": {"input_tokens": 10, "output_tokens": 10},
+                }}
+            payload = {"custom_id": req["custom_id"], "result": result}
+            yield SimpleNamespace(model_dump=lambda p=payload: p)
+
+
+class BatchEmitTests(ProgressTestCase):
+    """Drives run_pipeline down the batch path with the provider calls faked."""
+
+    def setUp(self):
+        super().setUp()
+        work = tempfile.TemporaryDirectory()
+        self.addCleanup(work.cleanup)
+        cwd = os.getcwd()
+        os.chdir(work.name)  # the pipeline writes checkpoints/ relative to cwd
+        self.addCleanup(os.chdir, cwd)
+        self.batches = _FakeBatches()
+        provider = SimpleNamespace(
+            supports_batching=True, provider_name="fake", model_name="fake",
+            raw_client=SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(batches=self.batches))),
+            reported_model="fake-v1", model_drift=None, search_model_name=None,
+            resolution=SimpleNamespace(source="tier", tier="fast"),
+            smoke_test=mock.Mock(return_value="fake-v1"),
+            note_model=mock.Mock(),
+        )
+        self.classify = mock.Mock(side_effect=lambda **kw: _agent1())
+        for target, repl in (
+            ("build_provider", mock.Mock(return_value=provider)),
+            ("_rates_for", lambda provider: {"input": 1e-6, "output": 5e-6,
+                                             "cache_write": 0.0, "cache_read": 0.0}),
+            ("agent0_enrich", mock.Mock(return_value=dict(ENRICH_OK))),
+            ("agent1_classify", self.classify),
+        ):
+            p = mock.patch.object(orch, target, repl)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_batch(self, names):
+        companies = [
+            {"company_name": n, "description": "d", "_original_row": {"company_name": n}}
+            for n in names
+        ]
+        config = {
+            "pipeline": {"checkpoint_interval": 100},
+            "validation": {"validator_enabled": False},
+            "epo": {"enabled": False},
+            "enrichment": {"enabled": True},
+            "batch": {"enabled": True, "batch_poll_interval_s": 0},
+            "llm": {"provider": "fake"},
+        }
+        os.environ[ENV] = str(self.path)
+        # Capture the run's log output so the suite stays quiet; returned for assertions.
+        with self.assertLogs(level="INFO") as logs:
+            results = orch.run_pipeline(companies, config, "out.xlsx")
+        return results, logs.output
+
+    def steps_for(self, index):
+        return [
+            e["step"] for e in self.read_events()
+            if e["kind"] == "step" and e["index"] == index
+        ]
+
+    def test_batch_run_emits_steps_in_order_per_row(self):
+        names = ["A", "B", "C"]
+        results, _ = self.run_batch(names)
+        self.assertEqual([r["classification"] for r in results], ["deep tech"] * 3)
+        self.assertEqual(self.classify.call_count, 0)
+        for i in range(len(names)):
+            self.assertEqual(
+                self.steps_for(i),
+                ["Enrichment", "Waiting for batch", "In batch job", "Confidence scoring"],
+                f"row {i}",
+            )
+        phases = [e["phase"] for e in self.read_events() if e["kind"] == "phase"]
+        self.assertIn("Classify in one batch job · 3 companies submitted", phases)
+
+
 del ProgressTestCase  # base class only
 
 if __name__ == "__main__":
