@@ -571,6 +571,7 @@ def _phase3_parse(
             logger.error(f"custom_id={custom_id} out of range ({len(company_data_list)} companies).")
             continue
         cd = company_data_list[idx]
+        progress.emit("step", index=idx, step="Classification")
         agent1_result = _classify_online(cd, config, provider)
         agent1_outputs[custom_id] = agent1_result
         outcome = "failed" if agent1_result.get("classification") == "error" else "succeeded"

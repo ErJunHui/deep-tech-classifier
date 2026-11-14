@@ -237,6 +237,21 @@ class BatchEmitTests(ProgressTestCase):
         phases = [e["phase"] for e in self.read_events() if e["kind"] == "phase"]
         self.assertIn("Classify in one batch job · 3 companies submitted", phases)
 
+    def test_batch_row_retried_online_shows_classification(self):
+        self.batches.failed = {"1"}
+        results, logs = self.run_batch(["A", "B", "C"])
+        self.assertEqual(self.classify.call_count, 1)  # only B is reclassified online
+        self.assertEqual(
+            [r["classification"] for r in results], ["deep tech", "general tech", "deep tech"],
+        )
+        self.assertTrue(any("Online retry succeeded for custom_id=1" in line for line in logs))
+        self.assertEqual(
+            self.steps_for(1),
+            ["Enrichment", "Waiting for batch", "In batch job", "Classification", "Confidence scoring"],
+        )
+        for i in (0, 2):
+            self.assertNotIn("Classification", self.steps_for(i), f"row {i}")
+
 
 del ProgressTestCase  # base class only
 
