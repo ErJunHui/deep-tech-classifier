@@ -47,9 +47,12 @@ def _usable(text: Any) -> bool:
     return bool(text and str(text).strip() not in ("nan", "None", ""))
 
 
-def _patent_status(r: Dict[str, Any]) -> str:
+def _patent_status(r: Dict[str, Any], config: Dict[str, Any]) -> str:
+    # The result does not record that EPO was off (that is only in the EPO
+    # raw status), so the run's config decides; a missing key means enabled.
+    epo_enabled = (config.get("epo") or {}).get("enabled", True)
     status = r.get("epo_validation_status") or ""
-    if status in ("EPO Disabled", "Not Run"):
+    if not epo_enabled or status in ("EPO Disabled", "Not Run"):
         return "disabled"
     if (r.get("patent_count") or 0) > 0:
         return "success"
@@ -109,7 +112,7 @@ def _result_view(company: Dict[str, Any], r: Dict[str, Any], config: Dict[str, A
             "count": patent_count,
             "level": r.get("epo_deeptech_level", ""),
             "domain": "" if domain == "N/A" else domain,
-            "status": _patent_status(r),
+            "status": _patent_status(r, config),
             "cpc": [{"code": code, "desc": _cpc_desc(code)} for code in (r.get("cpc_codes") or [])[:_MAX_CPC]],
         },
         "basis": r.get("classification_basis", ""),

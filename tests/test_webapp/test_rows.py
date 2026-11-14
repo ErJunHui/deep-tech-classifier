@@ -167,6 +167,15 @@ class RowsTest(unittest.TestCase):
                 res = _row(_success(epo_validation_status=status, patent_count=count))["result"]
                 self.assertEqual(res["patents"]["status"], expected)
 
+    def test_epo_turned_off_in_run_config_maps_to_disabled(self):
+        result = _success(epo_validation_status="Not Validated", patent_count=0, cpc_codes=[])
+        off = {**CONFIG, "epo": {"enabled": False}}
+        self.assertEqual(_row(result, config=off)["result"]["patents"]["status"], "disabled")
+        on = {**CONFIG, "epo": {"enabled": True}}
+        self.assertEqual(_row(result, config=on)["result"]["patents"]["status"], "no_results")
+        # A missing key means enabled.
+        self.assertEqual(_row(result, config=CONFIG)["result"]["patents"]["status"], "no_results")
+
     def test_unknown_cost_stays_none(self):
         self.assertIsNone(_row(_success(total_cost_usd=None))["result"]["cost"])
 
