@@ -141,6 +141,16 @@ class SettingsMapTest(unittest.TestCase):
         self.assertEqual(info["pricedModels"], sorted(models.COST_RATES))
         self.assertEqual(info["defaults"], DEFAULT_SETTINGS)
 
+    def test_provider_key_vars_match_pipeline(self):
+        # pipeline/settings.py checks each key in if/elif code, so the table to
+        # compare against is llm_provider._PROVIDERS (id -> (key var, class)); it
+        # imports no provider SDK and needs no network or keys.
+        from pipeline import llm_provider
+
+        web = {p["id"]: p["keyVar"] for p in setup_info({})["providers"]}
+        self.assertEqual(set(web), set(models.CANDIDATES))
+        self.assertEqual(web, {pid: entry[0] for pid, entry in llm_provider._PROVIDERS.items()})
+
 
 if __name__ == "__main__":
     unittest.main()
