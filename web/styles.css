@@ -37,6 +37,11 @@ body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); -
 button, input, select, textarea { font: inherit; color: inherit; }
 
 .v-workbench { --wb-rail: 200px; --wb-detail: 480px; position: relative; display: grid; grid-template-columns: var(--wb-rail) minmax(0, 1fr) min(var(--wb-detail), calc((100% - var(--wb-rail)) * 0.6)); height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
+/* Addition to the prototype CSS: one explicit full-height row. The empty overlay, pop and modal
+   containers are grid items that open a second auto row; without this the free height is split
+   between the two rows and the columns stop short of the window. Their content is absolutely
+   positioned, so that row stays 0 px tall. */
+.v-workbench { grid-template-rows: minmax(0, 1fr); }
 @media (min-width: 1600px) { .v-workbench { --wb-detail: 540px; } }
 @media (max-width: 1299px) { .v-workbench { --wb-rail: 176px; --wb-detail: 380px; } }
 @media (max-width: 1099px) { .v-workbench { --wb-rail: 160px; --wb-detail: 340px; } }
