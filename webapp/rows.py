@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pipeline import review
+from webapp import decisions
 
 _CPC_DESCRIPTIONS = Path(__file__).resolve().parent.parent / "lib" / "epo_patent" / "config" / "cpc_descriptions.json"
 _MAX_CPC = 12
@@ -155,13 +156,6 @@ def to_row(
     }
 
 
-def _current_decision(history: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The last history entry, unless it is a restore (then there is none)."""
-    if not history or history[-1].get("type") == "restore":
-        return None
-    return history[-1]
-
-
 def counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     """
     done, deep, general, errors, open over rows that have a result.
@@ -179,7 +173,7 @@ def counts(rows: List[Dict[str, Any]]) -> Dict[str, int]:
         if res["error"]:
             out["errors"] += 1
             continue
-        decision = _current_decision(row.get("history") or [])
+        decision = decisions.current(row.get("history") or [])
         verdict = decision.get("verdict") if decision else res["verdict"]
         if verdict == "deep tech":
             out["deep"] += 1
