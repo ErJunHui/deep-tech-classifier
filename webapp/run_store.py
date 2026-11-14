@@ -20,10 +20,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
-import pandas as pd
-from openpyxl import Workbook
-
 from data.reader import read_companies
+from webapp.files import write_without_rows
 from webapp.settings_map import to_pipeline_config
 
 _RUN_ID = re.compile(r"run_[0-9_]+")
@@ -93,51 +91,6 @@ def _write_json_atomic(path: Path, value: Any) -> None:
         raise
 
 
-def _check_exclude(exclude: Any) -> List[int]:
-    """exclude as sorted distinct ints; ValueError when it is not a list of ints."""
-    if exclude is None:
-        return []
-    if not isinstance(exclude, list):
-        raise ValueError("exclude must be a list of row numbers.")
-    for entry in exclude:
-        if isinstance(entry, bool) or not isinstance(entry, int):
-            raise ValueError(f"exclude must list row numbers, not {entry!r}.")
-    return sorted(set(exclude))
-
-
-def _copy_without(source: Path, dest: Path, exclude: List[int]) -> None:
-    """
-    Write source to dest without the data rows in exclude, in the same format
-    and with the headers as pandas reads them (the names the mapping uses).
-    """
-    suffix = source.suffix.lower()
-    if suffix == ".xls":
-        raise ValueError(f"Rows cannot be left out of an .xls file. Save {source.name} as .xlsx "
-                         "and upload it again, or tick every row.")
-    # The same pandas calls as data/reader.py and webapp/files.py.
-    df = pd.read_csv(source, dtype=str) if suffix == ".csv" else pd.read_excel(source, dtype=str)
-    for index in exclude:
-        if not 0 <= index < len(df):
-            raise ValueError(f"Row {index} is not in {source.name}, which has {len(df)} rows (0 to {len(df) - 1}).")
-    if len(exclude) >= len(df):
-        raise ValueError("Tick at least one company to start")
-    kept = df.drop(index=df.index[exclude])
-    if suffix == ".csv":
-        kept.to_csv(dest, index=False)
-        return
-    wb = Workbook()
-    ws = wb.active
-    ws.append(list(kept.columns))
-    for row in kept.itertuples(index=False, name=None):
-        ws.append([None if pd.isna(value) else value for value in row])
-    # openpyxl takes a string starting with "=" for a formula; keep it text.
-    for row in ws.iter_rows():
-        for cell in row:
-            if cell.data_type == "f":
-                cell.data_type = "s"
-    wb.save(dest)
-
-
 def _sort_key(run_id: str) -> Tuple[int, ...]:
     """run_20261113_142233_2 -> (20261113, 142233, 2); no suffix counts as 1."""
     parts = [int(p) for p in run_id[len("run_"):].split("_") if p]
@@ -173,12 +126,10 @@ class RunStore:
         read with that config, the folder is removed and the error re-raised.
 
         exclude lists 0-based data rows of source_file to leave out of the
-        run's copy (same format and headers). ValueError, with a message fit
-        to show the user, when it is not a list of row numbers in range, it
-        leaves no row, or the file is .xls (which cannot be written).
+        run's copy; see files.write_without_rows, whose ValueError (a bad
+        exclude) is re-raised the same way.
         """
         source_file = Path(source_file)
-        exclude = _check_exclude(exclude)
         config = to_pipeline_config(settings, base_config, self.project_root)
         self.root.mkdir(parents=True, exist_ok=True)
         run_id, folder = self._new_folder()
@@ -186,10 +137,7 @@ class RunStore:
             for sub in _SUBFOLDERS:
                 (folder / sub).mkdir()
             input_path = folder / "input" / source_file.name
-            if exclude:
-                _copy_without(source_file, input_path, exclude)
-            else:
-                shutil.copyfile(source_file, input_path)
+            write_without_rows(source_file, input_path, exclude)
             _write_json_atomic(folder / "config.json", config)
             companies = read_companies(str(input_path), config)
             meta = {
@@ -276,9 +224,13 @@ class RunStore:
         if run_id not in self._companies:
             folder = self.run_dir(run_id)
             meta = self.get_meta(run_id)
-            config = _read_json(folder / "config.json") or {}
-            self._companies[run_id] = read_companies(str(folder / "input" / meta["file"]), config)
+            self._companies[run_id] = read_companies(str(folder / "input" / meta["file"]), self.config(run_id))
         return self._companies[run_id]
+
+    def config(self, run_id: str) -> Dict[str, Any]:
+        """The run's config.json; {} when it is missing, unreadable or not an object. KeyError for an unknown run."""
+        config = _read_json(self.run_dir(run_id) / "config.json")
+        return config if isinstance(config, dict) else {}
 
     # --- what the pipeline writes (read-only) ---
 

@@ -1,12 +1,14 @@
 """
-Save an uploaded spreadsheet and report what is in it.
+Save an uploaded spreadsheet and report what is in it, and write a run's
+copy of it without the rows the reviewer left out.
 
 Each upload is stored as uploads/<file_id>/<safe name>, where file_id is a
 fresh uuid4 hex and the safe name is the uploaded file's base name with
 anything that could leave that folder, or that Windows cannot store, removed.
 Reading uses the same pandas calls as data/reader.py.
 
-Every rejection is an UploadError whose message can be shown to the user.
+Every upload rejection is an UploadError whose message can be shown to the
+user; write_without_rows raises ValueError, with such a message too.
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ import re
 import shutil
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from openpyxl import Workbook
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 ALLOWED_EXTENSIONS = (".xlsx", ".xls", ".csv")
@@ -104,6 +107,13 @@ def _safe_name(filename: str) -> str:
     return stem + base[len(base) - len(ext):]
 
 
+def too_large_message() -> str:
+    """What an upload over MAX_UPLOAD_BYTES is told, by save_upload and by the API's size checks."""
+    mb, rest = divmod(MAX_UPLOAD_BYTES, 1024 * 1024)
+    size = f"{mb} MB" if mb and not rest else f"{MAX_UPLOAD_BYTES:,} bytes"
+    return f"The file is larger than {size}. Please upload a smaller spreadsheet."
+
+
 def save_upload(uploads_dir: Path, filename: str, data: bytes) -> Dict[str, Any]:
     """
     Store an uploaded file under uploads_dir and inspect it.
@@ -122,7 +132,7 @@ def save_upload(uploads_dir: Path, filename: str, data: bytes) -> Dict[str, Any]
     """
     name = _safe_name(filename)
     if len(data) > MAX_UPLOAD_BYTES:
-        raise UploadError("The file is larger than 20 MB. Please upload a smaller spreadsheet.")
+        raise UploadError(too_large_message())
     if not data:
         raise UploadError("The file is empty. Please choose a spreadsheet with a header row and at least one company.")
 
@@ -215,3 +225,63 @@ def resolve(uploads_dir: Path, file_id: str) -> Path:
     if len(entries) != 1 or not entries[0].is_file():
         raise FileNotFoundError("Unknown file")
     return entries[0]
+
+
+def _check_exclude(exclude: Any) -> List[int]:
+    """exclude as sorted distinct ints; ValueError when it is not a list of ints."""
+    if exclude is None:
+        return []
+    if not isinstance(exclude, list):
+        raise ValueError("exclude must be a list of row numbers.")
+    for entry in exclude:
+        if isinstance(entry, bool) or not isinstance(entry, int):
+            raise ValueError(f"exclude must list row numbers, not {entry!r}.")
+    return sorted(set(exclude))
+
+
+def write_without_rows(source: Path, dest: Path, exclude: Optional[List[int]]) -> None:
+    """
+    Write source to dest without the data rows in exclude.
+
+    exclude holds 0-based data-row indexes of source, i.e. rows of
+    inspect(source)["table"]. When it is empty or None the file is copied
+    byte for byte. Otherwise dest has the same format, with the headers as
+    pandas reads them (the names a mapping uses) and every cell as text;
+    text that looks like a formula stays text.
+
+    Raises:
+        ValueError, with a message fit to show the user: exclude is not a
+            list of row numbers, a number is not a row of source, it leaves
+            no row, or source is .xls (which cannot be written). Nothing is
+            written to dest.
+    """
+    source, dest = Path(source), Path(dest)
+    exclude = _check_exclude(exclude)
+    if not exclude:
+        shutil.copyfile(source, dest)
+        return
+    suffix = source.suffix.lower()
+    if suffix == ".xls":
+        raise ValueError(f"Rows cannot be left out of an .xls file. Save {source.name} as .xlsx "
+                         "and upload it again, or tick every row.")
+    df = _read(source)
+    for index in exclude:
+        if not 0 <= index < len(df):
+            raise ValueError(f"Row {index} is not in {source.name}, which has {len(df)} rows (0 to {len(df) - 1}).")
+    if len(exclude) >= len(df):
+        raise ValueError("Tick at least one company to start")
+    kept = df.drop(index=df.index[exclude])
+    if suffix == ".csv":
+        kept.to_csv(dest, index=False)
+        return
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(kept.columns))
+    for row in kept.itertuples(index=False, name=None):
+        ws.append([None if pd.isna(value) else value for value in row])
+    # openpyxl takes a string starting with "=" for a formula; keep it text.
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.data_type == "f":
+                cell.data_type = "s"
+    wb.save(dest)

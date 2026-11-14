@@ -88,6 +88,19 @@ class RunStoreTest(unittest.TestCase):
         self.assertEqual([c["company_name"] for c in companies], ["Alpha", "Beta"])
         self.assertEqual(companies[0]["description"], "Quantum sensors")
 
+    def test_config_is_the_runs_config_json(self):
+        meta = self._create()
+        folder = self.store.run_dir(meta["id"])
+        config = self.store.config(meta["id"])
+        self.assertEqual(config, json.loads((folder / "config.json").read_text(encoding="utf-8")))
+        self.assertEqual(config["pipeline"]["company_name_column"], "Company")
+        (folder / "config.json").write_text("[1, 2]", encoding="utf-8")
+        self.assertEqual(self.store.config(meta["id"]), {})
+        (folder / "config.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(self.store.config(meta["id"]), {})
+        with self.assertRaises(KeyError):
+            self.store.config("run_19990101_000000")
+
     def test_create_with_empty_exclude_copies_the_file_unchanged(self):
         meta = self.store.create(self.source, self.settings, _template(), exclude=[])
         folder = self.store.run_dir(meta["id"])

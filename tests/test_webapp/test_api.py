@@ -144,13 +144,17 @@ class ApiTest(unittest.TestCase):
         with mock.patch.object(files, "MAX_UPLOAD_BYTES", 1000):
             r = self.client.post("/api/files", files={"file": ("big.csv", b"Company\n" + b"x" * 5000, "text/csv")})
         self.assertEqual(r.status_code, 400)
-        self.assertIn("larger than", r.json()["detail"])
-        # Refused by its Content-Length, before the body is parsed.
+        with mock.patch.object(files, "MAX_UPLOAD_BYTES", 1000):
+            self.assertEqual(r.json()["detail"], files.too_large_message())
+        # Refused by its Content-Length, before the body is parsed, with the
+        # message save_upload gives for too many bytes.
         with mock.patch.object(files, "MAX_UPLOAD_BYTES", 10), \
                 mock.patch("starlette.requests.Request.form", side_effect=AssertionError("body was parsed")):
             r = self.client.post("/api/files", files={"file": ("big.csv", b"x" * 70_000, "text/csv")})
+            with self.assertRaises(files.UploadError) as ctx:
+                files.save_upload(self.tmp / "unused", "big.csv", b"x" * 11)
         self.assertEqual(r.status_code, 400)
-        self.assertIn("larger than", r.json()["detail"])
+        self.assertEqual(r.json()["detail"], str(ctx.exception))
         # Only the first, good upload was kept.
         uploads = Path(self.client.app.state.store.root).parent / "uploads"
         self.assertEqual([p.name for p in uploads.iterdir()], [upload["fileId"]])
@@ -213,6 +217,21 @@ class ApiTest(unittest.TestCase):
         first = self._start(2, client)["id"]
         second = self._start(2, client)["id"]
         self.assertEqual([r["id"] for r in client.get("/api/runs").json()], [second, first])
+
+    def test_a_damaged_run_is_left_out_of_the_list(self):
+        client = self._client(SLEEPER)
+        damaged = self._start(2, client)["id"]
+        healthy = self._start(2, client)["id"]
+        store = client.app.state.store
+        # Not an HTTPException: decisions.json that cannot be read is a DecisionError.
+        (store.run_dir(damaged) / "decisions.json").write_text("{not json", encoding="utf-8")
+        with self.assertLogs("webapp.app", "WARNING") as logs:
+            for _ in range(2):
+                r = client.get("/api/runs")
+                self.assertEqual(r.status_code, 200, r.text)
+                self.assertEqual([run["id"] for run in r.json()], [healthy])
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn(damaged, logs.output[0])
 
     def test_start_rejects_missing_name_mapping_and_missing_key(self):
         upload = self._upload(3)
@@ -375,7 +394,10 @@ class ApiTest(unittest.TestCase):
         client, run_id = self._sleeping_run_with_results(5, [1, 3])
         r = self._decide(run_id, 3, "change", note="Checked", client=client)
         self.assertEqual(r.status_code, 200, r.text)
-        client.post(f"/api/runs/{run_id}/stop")
+        r = client.post(f"/api/runs/{run_id}/stop")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["status"], "stopped")
+        self.assertEqual(self._get(run_id, client)["run"]["status"], "stopped")
 
         r = client.get(f"/api/runs/{run_id}/export.xlsx")
         self.assertEqual(r.status_code, 200, r.text)

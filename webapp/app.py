@@ -10,8 +10,10 @@ the store, runner and decisions modules lock what they share.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -29,8 +31,10 @@ from webapp import decisions, files, rows as row_view, settings_map
 from webapp.decisions import DecisionError
 from webapp.estimate import EstimateError, estimate_request
 from webapp.files import UploadError
-from webapp.run_store import RunStore, _read_json
+from webapp.run_store import RunStore
 from webapp.runner import Runner, RunnerError
+
+logger = logging.getLogger(__name__)
 
 XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # Room for the multipart boundaries and part headers around the file itself.
@@ -76,6 +80,10 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
     app = FastAPI(lifespan=lifespan)
     app.state.store = store
     app.state.runner = runner
+    # The last error per run id that kept it out of GET /api/runs, (type name,
+    # message), so one that repeats on every listing is logged once.
+    list_failures: Dict[str, Tuple[str, str]] = {}
+    list_failures_lock = threading.Lock()
 
     def _detail(status: int, exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=status, content={"detail": str(exc)})
@@ -115,10 +123,6 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         except KeyError:
             raise HTTPException(status_code=404, detail="No such run.") from None
 
-    def _config(run_id: str) -> Dict[str, Any]:
-        config = _read_json(store.run_dir(run_id) / "config.json")
-        return config if isinstance(config, dict) else {}
-
     def _snapshot(run_id: str, cursor: int = 0) -> Tuple[Dict[str, Any], List[Dict[str, Any]], int, set]:
         """(RunSummary, every Row, checkpoint lines read, indexes whose result landed after cursor)."""
         meta = _meta(run_id)
@@ -126,7 +130,7 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         results, consumed, changed = store.read_results_since(run_id, cursor)
         steps, phase = store.read_progress(run_id)
         history = decisions.load(store.run_dir(run_id))
-        config = _config(run_id)
+        config = store.config(run_id)
         rows = [row_view.to_row(i, company, results.get(i), steps.get(i), history.get(i, []), config)
                 for i, company in enumerate(companies)]
         settings = meta.get("settings") or {}
@@ -154,7 +158,7 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         steps, _ = store.read_progress(run_id)
         history = decisions.load(store.run_dir(run_id)).get(index, [])
         return row_view.to_row(index, companies[index], results.get(index), steps.get(index), history,
-                               _config(run_id))
+                               store.config(run_id))
 
     def _existing_row(run_id: str, index: int) -> Dict[str, Any]:
         row = _row(run_id, index)
@@ -173,8 +177,7 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         limit = files.MAX_UPLOAD_BYTES
         length = request.headers.get("content-length", "")
         if length.isdigit() and int(length) > limit + _MULTIPART_OVERHEAD:
-            raise UploadError(f"The file is larger than {limit // (1024 * 1024)} MB. "
-                              "Please upload a smaller spreadsheet.")
+            raise UploadError(files.too_large_message())
         form = await request.form(max_files=1, max_fields=10)
         try:
             upload = form.get("file")
@@ -197,10 +200,20 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         runner.poll()
         summaries = []
         for meta in store.list_runs():
+            run_id = meta.get("id")
             try:
-                summaries.append(_snapshot(meta["id"])[0])
-            except HTTPException:  # removed since it was listed
+                summaries.append(_snapshot(run_id)[0])
+            except Exception as exc:
+                # A damaged or half-deleted run is left out; the others are listed.
+                failure = (type(exc).__name__, str(exc))
+                with list_failures_lock:
+                    new = list_failures.get(run_id) != failure
+                    list_failures[run_id] = failure
+                if new:
+                    logger.warning("Run %s is left out of the run list: %s: %s", run_id, *failure)
                 continue
+            with list_failures_lock:
+                list_failures.pop(run_id, None)
         return summaries
 
     @app.post("/api/runs", status_code=201)
