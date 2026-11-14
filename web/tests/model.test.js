@@ -1,0 +1,346 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  esc, clamp, pad, money, fmtDur, confWord, signed, flip, vLabel, vLow, actionFor, hhmm, dateLabel,
+  currentDecision, rowView, counts, newFilters, anyFilter, computeIds,
+  formProblem, needsNote, startProblem, skippedCount,
+} from '../js/model.js';
+
+/* ---------- fixtures in the Row shape ---------- */
+const result = (o = {}) => Object.assign({
+  error: false, errorMessage: '', verdict: 'deep tech', conf: 80, risk: 'Clear', tier: 'High',
+  llm: 80, adj: 0, pre: 80, capped: false, validated: false, override: '', val: null,
+  patents: { count: 0, level: '', domain: '', status: 'no_results', cpc: [] },
+  basis: 'COMBINED', reasoning: '', criteria: {}, hasInputDesc: true, hasWeb: true,
+  webDescription: '', webSource: '', webStatus: 'found', cost: 0.05, timeS: 30, model: '',
+}, o);
+const row = (index, res = null, history = [], o = {}) => Object.assign({
+  index, name: 'Company ' + index, uen: 'UEN' + index, domain: 'Sector ' + index, description: 'About ' + index,
+  step: null, result: res, history,
+}, o);
+const entry = (type, verdict, note = '') => ({ type, verdict, note, at: '2026-11-13T14:40:02' });
+const errorResult = (o = {}) => result(Object.assign({ error: true, errorMessage: 'boom', verdict: 'error', conf: 0, risk: 'Escalate', cost: null }, o));
+const ids = (rows, opts = {}) => computeIds(rows, Object.assign({ filters: newFilters(), sortKey: 'priority', sortDir: 1, running: false, snapshot: null }, opts));
+
+/* ---------- formatters ---------- */
+test('esc neutralises markup', () => assert.equal(esc(`<img src=x onerror="a">&'`), '&lt;img src=x onerror=&quot;a&quot;&gt;&amp;&#39;'));
+test('esc renders null and undefined as empty and numbers as text', () => {
+  assert.deepEqual([esc(null), esc(undefined), esc(0), esc(42)], ['', '', '0', '42']);
+});
+test('fmtDur', () => assert.deepEqual([fmtDur(40), fmtDur(600), fmtDur(5400)], ['~40 s', '~10 min', '~1 h 30 min']));
+test('fmtDur: under a second rounds up to 1 s; whole hours have no minutes', () => {
+  assert.deepEqual([fmtDur(0.2), fmtDur(89), fmtDur(90), fmtDur(7200)], ['~1 s', '~89 s', '~2 min', '~2 h']);
+});
+test('confWord boundaries', () => {
+  assert.deepEqual(
+    [100, 90, 89, 75, 74, 60, 59, 45, 44, 30, 29, 0].map(confWord),
+    ['Near-definitive', 'Near-definitive', 'Strong', 'Strong', 'Moderate', 'Moderate', 'Borderline', 'Borderline', 'Weak', 'Weak', 'Minimal', 'Minimal'],
+  );
+});
+test('clamp and pad', () => {
+  assert.deepEqual([clamp(-5, 0, 100), clamp(50, 0, 100), clamp(120, 0, 100)], [0, 50, 100]);
+  assert.deepEqual([pad(3), pad(12)], ['03', '12']);
+});
+test('money: two decimals by default, or the given number', () => {
+  assert.deepEqual([money(1.5), money(0.0523, 3), money(12, 0)], ['$1.50', '$0.052', '$12']);
+});
+test('signed uses a real minus sign and ± for zero', () => {
+  assert.deepEqual([signed(3), signed(-4), signed(0)], ['+3', '−4', '±0']);
+});
+test('verdict helpers', () => {
+  assert.deepEqual([flip('deep tech'), flip('general tech')], ['general tech', 'deep tech']);
+  assert.deepEqual([vLabel('deep tech'), vLabel('general tech')], ['Deep tech', 'General tech']);
+  assert.deepEqual([vLow('deep tech'), vLow('general tech')], ['deep tech', 'general tech']);
+  assert.deepEqual([actionFor('deep tech'), actionFor('general tech')], ['Approve', 'Reject']);
+});
+test('hhmm pads local hours and minutes', () => assert.equal(hhmm(new Date(2026, 10, 13, 8, 5)), '08:05'));
+test('dateLabel: today shows the time, another day shows the date', () => {
+  const now = new Date(2026, 10, 13, 17, 0);
+  assert.equal(dateLabel('2026-11-13T08:42:10', now), 'Today, 08:42');
+  assert.equal(dateLabel('2026-11-02T23:59:00', now), '2 Nov 2026');
+  assert.equal(dateLabel('2025-11-13T08:42:10', now), '13 Nov 2025');
+  assert.equal(dateLabel('', now), '');
+  assert.equal(dateLabel('not a date', now), '');
+});
+
+/* ---------- decisions ---------- */
+test('currentDecision: last entry unless it is a restore or there is none', () => {
+  assert.equal(currentDecision([]), null);
+  assert.equal(currentDecision(undefined), null);
+  const c = entry('change', 'general tech');
+  assert.equal(currentDecision([entry('confirm', 'deep tech'), c]), c);
+  assert.equal(currentDecision([c, entry('restore', 'deep tech')]), null);
+});
+
+/* ---------- rowView ---------- */
+test('rowView: flagged undecided row is open and Needs Review', () => {
+  const r = row(2, result({ risk: 'Contested' }));
+  const v = rowView(r, 5);
+  assert.equal(v.row, r);
+  assert.equal(v.r, r.result);
+  assert.equal(v.idx, 3);
+  assert.equal(v.dec, null);
+  assert.equal(v.error, false);
+  assert.equal(v.flagged, true);
+  assert.equal(v.open, true);
+  assert.equal(v.verdict, 'deep tech');
+  assert.equal(v.reclassified, false);
+  assert.equal(v.confirmed, false);
+  assert.equal(v.action, 'Needs Review');
+});
+test('rowView: clear undecided row is not open and its action follows the verdict', () => {
+  const v = rowView(row(0, result({ verdict: 'general tech' })), 1);
+  assert.deepEqual([v.flagged, v.open, v.action], [false, false, 'Reject']);
+});
+test('rowView: change decision reclassifies and sets action from the new verdict', () => {
+  const v = rowView(row(0, result({ risk: 'Escalate', verdict: 'deep tech' }), [entry('change', 'general tech', 'why')]), 1);
+  assert.equal(v.dec.type, 'change');
+  assert.equal(v.verdict, 'general tech');
+  assert.equal(v.reclassified, true);
+  assert.equal(v.confirmed, false);
+  assert.equal(v.open, false);
+  assert.equal(v.flagged, true);
+  assert.equal(v.action, 'Reject');
+});
+test('rowView: confirm decision is confirmed and closes a flagged row', () => {
+  const v = rowView(row(0, result({ risk: 'Uncertain' }), [entry('confirm', 'deep tech')]), 1);
+  assert.deepEqual([v.confirmed, v.reclassified, v.open, v.action], [true, false, false, 'Approve']);
+});
+test('rowView: restore clears the decision', () => {
+  const v = rowView(row(0, result({ risk: 'Escalate' }), [entry('change', 'general tech'), entry('restore', 'deep tech')]), 1);
+  assert.equal(v.dec, null);
+  assert.equal(v.verdict, 'deep tech');
+  assert.deepEqual([v.reclassified, v.confirmed, v.open, v.action], [false, false, true, 'Needs Review']);
+});
+test('rowView: a decision override replaces the history, null meaning none', () => {
+  const r = row(0, result({ risk: 'Escalate' }), [entry('change', 'general tech')]);
+  assert.equal(rowView(r, 1, null).open, true);
+  assert.equal(rowView(r, 1, null).verdict, 'deep tech');
+  const v = rowView(row(0, result({ risk: 'Escalate' })), 1, entry('confirm', 'deep tech'));
+  assert.equal(v.confirmed, true);
+});
+test('rowView: error row is never open and has no verdict', () => {
+  const v = rowView(row(1, errorResult({ risk: 'Escalate' })), 2);
+  assert.equal(v.error, true);
+  assert.equal(v.flagged, false);
+  assert.equal(v.open, false);
+  assert.equal(v.verdict, null);
+  assert.equal(v.dec, null);
+  assert.deepEqual([v.reclassified, v.confirmed], [false, false]);
+  assert.equal(v.action, 'Needs Review');
+  assert.equal(v.idx, 2);
+});
+test('rowView: pending row has no result, verdict or action', () => {
+  const v = rowView(row(4, null, [], { step: 'Enrichment' }), 5);
+  assert.deepEqual([v.r, v.dec, v.verdict, v.action, v.error, v.open, v.flagged, v.idx], [null, null, null, null, false, false, false, 5]);
+});
+
+/* ---------- counts ---------- */
+test('counts: reclassified row counts under its new verdict; errors counted apart', () => {
+  const rows = [
+    row(0, result({ verdict: 'deep tech', risk: 'Clear', conf: 90, cost: 0.1 })),
+    row(1, result({ verdict: 'deep tech', risk: 'Escalate', conf: 50, cost: 0.2 }), [entry('change', 'general tech')]),
+    row(2, result({ verdict: 'general tech', risk: 'Contested', conf: 40, cost: 0.3 })),
+    row(3, result({ verdict: 'general tech', risk: 'Uncertain', conf: 60, cost: 0.4 }), [entry('confirm', 'general tech')]),
+    row(4, errorResult({ risk: 'Escalate', conf: 0, cost: 9 })),
+    row(5, null),
+  ];
+  const k = counts(rows);
+  assert.equal(k.total, 6);
+  assert.equal(k.done, 5);
+  assert.equal(k.errors, 1);
+  assert.equal(k.deep, 1);
+  assert.equal(k.general, 3);
+  assert.equal(k.open, 1);
+  assert.equal(k.confirmed, 1);
+  assert.equal(k.reclassified, 1);
+  assert.deepEqual(k.risk, { Clear: 1, Uncertain: 1, Contested: 1, Escalate: 1 });
+  assert.equal(Math.round(k.cost * 100) / 100, 1);
+  assert.equal(k.costUnknown, false);
+  assert.equal(k.avg, 60);
+});
+test('counts: unknown cost is flagged; no results means no average', () => {
+  assert.equal(counts([row(0, result({ cost: null })), row(1, result({ cost: 0.1 }))]).costUnknown, true);
+  const k = counts([row(0, null), row(1, errorResult())]);
+  assert.deepEqual([k.total, k.done, k.errors, k.avg, k.cost], [2, 1, 1, null, 0]);
+});
+
+/* ---------- filters ---------- */
+test('newFilters and anyFilter', () => {
+  const f = newFilters();
+  assert.equal(anyFilter(f), false);
+  assert.equal(anyFilter(Object.assign(newFilters(), { q: '   ' })), false);
+  assert.equal(anyFilter(Object.assign(newFilters(), { q: 'x' })), true);
+  assert.equal(anyFilter(Object.assign(newFilters(), { bin: 0 })), true);
+  const g = newFilters(); g.risk.add('Clear');
+  assert.equal(anyFilter(g), true);
+  assert.notEqual(newFilters().risk, newFilters().risk);
+});
+
+/* ---------- computeIds ---------- */
+test('computeIds: priority puts open rows first, then by severity Escalate<Contested<Uncertain, then lowest confidence', () => {
+  const rows = [
+    row(0, result({ risk: 'Clear', conf: 95 })),
+    row(1, result({ risk: 'Uncertain', conf: 55 })),
+    row(2, result({ risk: 'Escalate', conf: 70 })),
+    row(3, result({ risk: 'Contested', conf: 60 })),
+    row(4, result({ risk: 'Escalate', conf: 40 })),
+    row(5, result({ risk: 'Escalate', conf: 30 }), [entry('confirm', 'deep tech')]),
+    row(6, result({ risk: 'Clear', conf: 80 })),
+    row(7, null),
+  ];
+  assert.deepEqual(ids(rows), [4, 2, 3, 1, 5, 6, 0, 7]);
+});
+test('computeIds: error rows sort after flagged rows and before clear rows', () => {
+  const rows = [
+    row(0, result({ risk: 'Clear', conf: 95 })),
+    row(1, errorResult({ risk: 'Escalate' })),
+    row(2, result({ risk: 'Contested', conf: 60 }), [entry('confirm', 'deep tech')]),
+    row(3, result({ risk: 'Escalate', conf: 50 })),
+    row(4, errorResult({ risk: 'Clear' })),
+    row(5, null),
+  ];
+  assert.deepEqual(ids(rows), [3, 2, 1, 4, 0, 5]);
+});
+test('computeIds: input order while running', () => {
+  const rows = [
+    row(0, result({ risk: 'Clear' })),
+    row(1, null),
+    row(2, result({ risk: 'Escalate' })),
+  ];
+  assert.deepEqual(ids(rows, { running: true }), [0, 1, 2]);
+  assert.deepEqual(ids(rows, { running: false }), [2, 0, 1]);
+});
+test('computeIds: idx sort honours direction; other keys sort by value then input order', () => {
+  const rows = [
+    row(0, result({ conf: 70 }), [], { name: 'beta' }),
+    row(1, result({ conf: 50 }), [], { name: 'Alpha' }),
+    row(2, result({ conf: 70 }), [], { name: 'gamma' }),
+    row(3, null, [], { name: 'aardvark' }),
+  ];
+  assert.deepEqual(ids(rows, { sortKey: 'idx', sortDir: -1 }), [3, 2, 1, 0]);
+  assert.deepEqual(ids(rows, { sortKey: 'name', sortDir: 1 }), [1, 0, 2, 3]);
+  assert.deepEqual(ids(rows, { sortKey: 'conf', sortDir: -1 }), [0, 2, 1, 3]);
+});
+test('computeIds: a row decided after the snapshot keeps its place', () => {
+  const rows = [
+    row(0, result({ risk: 'Clear', conf: 90 })),
+    row(1, result({ risk: 'Escalate', conf: 40 }), [entry('confirm', 'deep tech')]),
+    row(2, result({ risk: 'Contested', conf: 50 })),
+  ];
+  // Snapshot taken before row 1 was decided: it still sorts as open.
+  assert.deepEqual(ids(rows, { snapshot: {} }), [1, 2, 0]);
+  // With the decisions as they are now, it drops below the open row.
+  assert.deepEqual(ids(rows, { snapshot: null }), [2, 1, 0]);
+  // A snapshot that holds the decision sorts by it.
+  assert.deepEqual(ids(rows, { snapshot: { 1: entry('confirm', 'deep tech') } }), [2, 1, 0]);
+});
+test('computeIds: search matches name, UEN, domain and description, case-insensitively', () => {
+  const rows = [
+    row(0, result(), [], { name: 'Lumora Photonics' }),
+    row(1, result(), [], { uen: '201912345K' }),
+    row(2, result(), [], { domain: 'Quantum Sensing' }),
+    row(3, result(), [], { description: 'Builds BATTERY cells' }),
+    row(4, result()),
+  ];
+  const q = (s) => ids(rows, { filters: Object.assign(newFilters(), { q: s }), sortKey: 'idx' });
+  assert.deepEqual(q('lumora'), [0]);
+  assert.deepEqual(q('201912345k'), [1]);
+  assert.deepEqual(q('  QUANTUM '), [2]);
+  assert.deepEqual(q('battery'), [3]);
+  assert.deepEqual(q('nothing like it'), []);
+});
+test('computeIds: pending rows are hidden by any result filter but not by search', () => {
+  const rows = [row(0, result({ risk: 'Clear' })), row(1, null, [], { name: 'Pending Co' })];
+  const f = newFilters(); f.risk.add('Clear');
+  assert.deepEqual(ids(rows, { filters: f }), [0]);
+  assert.deepEqual(ids(rows, { filters: Object.assign(newFilters(), { q: 'pending' }) }), [1]);
+});
+test('computeIds: risk, verdict and status filters use the current verdict and decision', () => {
+  const rows = [
+    row(0, result({ risk: 'Escalate', verdict: 'deep tech' })),
+    row(1, result({ risk: 'Escalate', verdict: 'deep tech' }), [entry('change', 'general tech')]),
+    row(2, result({ risk: 'Clear', verdict: 'general tech' }), [entry('confirm', 'general tech')]),
+  ];
+  const by = (k, vals) => { const f = newFilters(); vals.forEach((x) => f[k].add(x)); return ids(rows, { filters: f, sortKey: 'idx' }); };
+  assert.deepEqual(by('risk', ['Escalate']), [0, 1]);
+  assert.deepEqual(by('verdict', ['general tech']), [1, 2]);
+  assert.deepEqual(by('status', ['open']), [0]);
+  assert.deepEqual(by('status', ['reviewed']), [2]);
+  assert.deepEqual(by('status', ['reclassified']), [1]);
+  assert.deepEqual(by('status', ['open', 'reclassified']), [0, 1]);
+});
+test('computeIds: error rows match no result filter but do match search', () => {
+  const rows = [row(0, errorResult({ risk: 'Escalate', conf: 0 }), [], { name: 'Broken Co' }), row(1, result({ risk: 'Escalate', conf: 5 }))];
+  const one = (k, v) => { const f = newFilters(); if (k === 'bin') f.bin = v; else f[k].add(v); return ids(rows, { filters: f }); };
+  assert.deepEqual(one('risk', 'Escalate'), [1]);
+  assert.deepEqual(one('verdict', 'deep tech'), [1]);
+  assert.deepEqual(one('status', 'open'), [1]);
+  assert.deepEqual(one('bin', 0), [1]);
+  assert.deepEqual(ids(rows, { filters: Object.assign(newFilters(), { q: 'broken' }) }), [0]);
+});
+test('computeIds: confidence bin 9 includes 100', () => {
+  const rows = [row(0, result({ conf: 100 })), row(1, result({ conf: 90 })), row(2, result({ conf: 89 })), row(3, result({ conf: 0 }))];
+  const bin = (b) => ids(rows, { filters: Object.assign(newFilters(), { bin: b }), sortKey: 'idx' });
+  assert.deepEqual(bin(9), [0, 1]);
+  assert.deepEqual(bin(8), [2]);
+  assert.deepEqual(bin(0), [3]);
+});
+
+/* ---------- decision form ---------- */
+test('formProblem: change on Clear needs a note; change on flagged does not', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })), 1);
+  const flagged = rowView(row(1, result({ risk: 'Contested' })), 2);
+  const note = 'A note is required to overturn a Clear verdict. It is written to the workbook.';
+  assert.equal(formProblem(clear, { choice: '', note: '' }), 'Choose an outcome.');
+  assert.equal(formProblem(clear, { choice: 'change', note: '' }), note);
+  assert.equal(formProblem(clear, { choice: 'change', note: '   ' }), note);
+  assert.equal(formProblem(clear, { choice: 'change', note: 'Has a lab.' }), '');
+  assert.equal(formProblem(clear, { choice: 'confirm', note: '' }), '');
+  assert.equal(formProblem(flagged, { choice: 'change', note: '' }), '');
+});
+test('needsNote: only a change on a Clear row', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })), 1);
+  const flagged = rowView(row(1, result({ risk: 'Uncertain' })), 2);
+  assert.deepEqual([needsNote(clear, 'change'), needsNote(clear, 'confirm'), needsNote(flagged, 'change')], [true, false, false]);
+});
+
+/* ---------- new run setup ---------- */
+test('startProblem: file, then mapping, then ticked rows, then key', () => {
+  const setup = {
+    providers: [
+      { id: 'anthropic', label: 'Anthropic', keyVar: 'ANTHROPIC_API_KEY', keySet: false, batch: true },
+      { id: 'openai', label: 'OpenAI', keyVar: 'OPENAI_API_KEY', keySet: true, batch: false },
+    ],
+  };
+  const file = { fileId: 'f'.repeat(32), name: 'list.xlsx', rows: 2, headers: ['Company', 'About'], mapping: { company_name: 'Company' },
+    preview: [], table: [['A', ''], ['B', '']], emptyCounts: { Company: 0, About: 2 } };
+  const draft = { cfg: { provider: 'anthropic', mapping: {} }, file: null, excluded: new Set() };
+  let p = startProblem(draft, setup);
+  assert.equal(p.fix, 'file');
+  assert.equal(p.label, 'Choose an input file to start');
+  assert.equal(typeof p.text, 'string');
+
+  draft.file = file;
+  p = startProblem(draft, setup);
+  assert.deepEqual([p.fix, p.label], ['map', 'Map the company name column to start']);
+
+  draft.cfg.mapping = { company_name: 'Company' };
+  draft.excluded = new Set([0, 1]);
+  p = startProblem(draft, setup);
+  assert.deepEqual([p.fix, p.label], ['rows', 'Tick at least one company to start']);
+
+  draft.excluded = new Set([1]);
+  p = startProblem(draft, setup);
+  assert.deepEqual([p.fix, p.label], ['sheet', 'ANTHROPIC_API_KEY is not set in .env']);
+  assert.match(p.text, /ANTHROPIC_API_KEY/);
+
+  draft.cfg.provider = 'openai';
+  assert.equal(startProblem(draft, setup), null);
+});
+test('skippedCount: blank cells in the company name column', () => {
+  const file = { emptyCounts: { Company: 3, About: 7 } };
+  assert.equal(skippedCount(file, { company_name: 'Company' }), 3);
+  assert.equal(skippedCount(file, {}), 0);
+  assert.equal(skippedCount(file, { company_name: 'Missing' }), 0);
+});

@@ -1,1 +1,49 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Deep-tech classifier</title></head><body><p>The workbench frontend is not built yet; the API is under /api.</p></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep Tech Classifier</title>
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="js/main.js"></script>
+</head>
+<body>
+<div id="stage">
+<div class="v-workbench">
+  <aside class="wb-rail" aria-label="Runs">
+    <div class="wb-rail-top">
+      <div class="wb-brand">Deep Tech Classifier</div>
+      <button class="wb-btn wb-btn-primary wb-newrun" data-act="new-run" data-fk="new-run">+ New run <kbd>O</kbd></button>
+    </div>
+    <nav class="wb-rail-list" data-r="rail"></nav>
+    <div class="wb-rail-foot" data-r="railfoot"></div>
+  </aside>
+  <main class="wb-main" data-r="main">
+    <header class="wb-head" data-r="head"></header>
+    <section class="wb-strip" data-r="strip" aria-label="Run summary"></section>
+    <div class="wb-tools" data-r="tools">
+      <div class="wb-search">
+        <input type="search" data-fk="search" placeholder="Search company, UEN, sector" aria-label="Search companies" autocomplete="off">
+        <kbd aria-hidden="true">/</kbd>
+      </div>
+      <button class="wb-btn wb-btn-sm wb-filt-tg" data-act="filters-toggle" data-r="filt-tg" data-fk="filt-tg" aria-expanded="false">Filters</button>
+      <div class="wb-chips" data-r="chips"></div>
+    </div>
+    <div class="wb-tablewrap" data-r="table"></div>
+    <div class="wb-setbar" data-r="setbar" role="region" aria-label="Start the new run" hidden></div>
+    <div class="wb-dropover" aria-hidden="true">Drop to load this spreadsheet</div>
+  </main>
+  <div class="wb-side">
+    <div class="wb-divider" data-r="divider" role="separator" aria-orientation="vertical" aria-label="Resize evidence panel. Up or ] widens, down or [ narrows, Enter resets." tabindex="0"></div>
+    <aside class="wb-detail" data-r="detail" aria-label="Company evidence"></aside>
+  </div>
+  <div data-r="overlay"></div>
+  <div data-r="pop"></div>
+  <div data-r="modal"></div>
+  <div class="wb-toasts" data-r="toasts" role="status" aria-live="polite"></div>
+  <div class="wb-sr" data-r="live" role="status" aria-live="polite"></div>
+  <input type="file" class="wb-sr" data-r="file" accept=".xlsx,.xls,.csv" tabindex="-1" aria-hidden="true">
+</div>
+</div>
+</body>
+</html>
