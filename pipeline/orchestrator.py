@@ -24,7 +24,7 @@ from typing import Dict, Any, List, Optional
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
-from pipeline import models, validation_record
+from pipeline import models, progress, validation_record
 from pipeline.llm_provider import build_provider, get_cost_rates, cost_known, BATCH_DISCOUNT
 from pipeline.model_resolver import ModelSetupError
 from agents.classifier_agent import (
@@ -276,6 +276,9 @@ def _run_pipeline_batch(
     batch_phase = run_state.get("batch_phase", "pending")
 
     if not _batch_results_ready(run_state, batch_results_path):
+        batch_phase_text = (
+            f"Classify in one batch job · {len(company_data_list)} companies submitted"
+        )
         if batch_phase == "submitted" and run_state.get("batch_id"):
             logger.info(f"=== Phase 2: Resuming poll for batch {run_state['batch_id']} ===")
             batch_id = run_state["batch_id"]
@@ -296,10 +299,14 @@ def _run_pipeline_batch(
             run_state["batch_results_path"] = batch_results_path
             _save_run_state(run_state)
             logger.info(f"Batch submitted: {batch_id} ({len(batch_requests)} requests)")
+            progress.emit("phase", phase=batch_phase_text)
+            for i in range(len(company_data_list)):
+                progress.emit("step", index=i, step="In batch job")
 
         # Poll
         _raw = provider.raw_client
         while True:
+            progress.emit("phase", phase=batch_phase_text)
             status = _raw.beta.messages.batches.retrieve(batch_id)
             logger.info(
                 f"Batch {batch_id}: {status.processing_status} "
@@ -365,6 +372,7 @@ def _run_pipeline_batch(
                 validator_threshold=validator_threshold,
                 provider=provider,
                 rates=_rates,
+                index=i,
             )
         except Exception as exc:
             logger.error(f"Unhandled error in Phase 4 for '{name}': {exc}", exc_info=True)
@@ -403,6 +411,7 @@ def _gather_one(
     epo_secret: Optional[str],
     enrichment_enabled: bool,
     provider,
+    index: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run Agent 0 (web enrichment) + EPO lookup for one company → company_data dict."""
     name = company["company_name"]
@@ -412,6 +421,7 @@ def _gather_one(
     location = company.get("location", "")
 
     if enrichment_enabled:
+        progress.emit("step", index=index, step="Enrichment")
         enrich_result = agent0_enrich(
             company_name=name, uen=uen, domain=domain, location=location,
             config=config, provider=provider,
@@ -423,6 +433,7 @@ def _gather_one(
     resolved_description = web_description or dataset_description
 
     if epo_enabled and epo_key and epo_secret:
+        progress.emit("step", index=index, step="Patent lookup")
         epo_result = run_epo_lookup(
             name, epo_key, epo_secret, epo_package_dir,
             description=resolved_description, domain=domain,
@@ -486,10 +497,11 @@ def _phase1_gather(
         if i < len(result):
             continue
         logger.info(f"[{i+1}/{total}] Phase 1: {company['company_name']}")
-        record = _gather_one(company, **gather_kwargs)
+        record = _gather_one(company, index=i, **gather_kwargs)
         _check_model_drift(gather_kwargs.get("provider"))
         _append_jsonl(record, gathered_path)
         result.append(record)
+        progress.emit("step", index=i, step="Waiting for batch")
 
     return result
 
@@ -575,8 +587,10 @@ def _finalize_one(
     validator_threshold: int,
     provider,
     rates: Dict[str, float],
+    index: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Confidence scoring + Agent 2 for one company, given its Agent 1 result."""
+    progress.emit("step", index=index, step="Confidence scoring")
 
     name = cd["company_name"]
     domain = cd.get("domain", "")
@@ -611,6 +625,7 @@ def _finalize_one(
 
     if validator_enabled and scores["final_confidence"] < validator_threshold:
         validator_triggered = True
+        progress.emit("step", index=index, step="Validation")
         agent2 = agent2_validate(
             company_name=name,
             domain=domain,
@@ -799,6 +814,7 @@ def _run_pipeline_sequential(
                 provider=provider,
                 rates=_rates,
                 enrichment_enabled=enrichment_enabled,
+                index=i,
             )
             result["processing_errors"] = ""
         except Exception as exc:
@@ -834,6 +850,7 @@ def _process_one_sequential(
     provider,
     rates: Dict[str, float],
     enrichment_enabled: bool = True,
+    index: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Gather → classify → validate for one company, all with direct API calls."""
     cd = _gather_one(
@@ -845,7 +862,9 @@ def _process_one_sequential(
         epo_secret=epo_secret,
         enrichment_enabled=enrichment_enabled,
         provider=provider,
+        index=index,
     )
+    progress.emit("step", index=index, step="Classification")
     agent1 = _classify_online(cd, config, provider)
     return _finalize_one(
         cd=cd,
@@ -855,6 +874,7 @@ def _process_one_sequential(
         validator_threshold=validator_threshold,
         provider=provider,
         rates=rates,
+        index=index,
     )
 
 
