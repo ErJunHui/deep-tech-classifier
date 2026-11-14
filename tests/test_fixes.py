@@ -59,6 +59,22 @@ class ManagementViewTests(unittest.TestCase):
         self.assertEqual((row["Company Name"], row["UEN"]), ("Acme", "U1"))
 
 
+class OverviewSheetTests(unittest.TestCase):
+    def test_confidence_tier_counts_at_the_boundaries(self):
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Overview"
+        results = [{"classification": "deep tech", "confidence": c} for c in (75, 74, 50, 49, None)]
+        results.append({"classification": "error", "confidence": 90})  # errors are not counted
+        writer._write_overview_sheet(wb, results, {})
+        values = {ws.cell(row=r, column=1).value: ws.cell(row=r, column=2).value for r in range(1, ws.max_row + 1)}
+        self.assertEqual(
+            [values["High Confidence (≥75)"], values["Medium Confidence (50–74)"], values["Low Confidence (<50)"]],
+            ["1 (16.7%)", "2 (33.3%)", "2 (33.3%)"],
+        )
+
+
 class EpoBridgeTests(unittest.TestCase):
     def test_relative_package_dir_is_resolved_from_project_root(self):
         expected = str(ROOT / "lib" / "epo_patent")
@@ -69,13 +85,16 @@ class EpoBridgeTests(unittest.TestCase):
                 self.assertEqual(epo_bridge._resolve_package_dir("./lib/epo_patent"), expected)
             finally:
                 os.chdir(cwd)
-        self.assertEqual(epo_bridge._resolve_package_dir("/abs/epo"), "/abs/epo")
+        # An absolute path in this platform's form ("/abs/epo" on POSIX, "C:\abs\epo" on Windows).
+        absolute = os.path.abspath(os.path.join(os.sep, "abs", "epo"))
+        self.assertEqual(epo_bridge._resolve_package_dir(absolute), absolute)
 
     def test_missing_package_dir_is_reported(self):
+        missing = os.path.abspath(os.path.join(os.sep, "no", "such", "dir"))
         with self.assertLogs(epo_bridge.logger, level="ERROR") as logs:
-            result = epo_bridge.run_epo_lookup("Acme", "k", "s", "/no/such/dir")
+            result = epo_bridge.run_epo_lookup("Acme", "k", "s", missing)
         self.assertEqual(result.raw_status, "EPO Import Error")
-        self.assertIn("/no/such/dir", logs.output[0])
+        self.assertIn(missing, logs.output[0])
 
 
 class CostTests(unittest.TestCase):

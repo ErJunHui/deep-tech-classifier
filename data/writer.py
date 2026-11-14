@@ -12,6 +12,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
 from pipeline import models as _models
+from pipeline import review as _review
 
 logger = logging.getLogger(__name__)
 
@@ -234,37 +235,9 @@ def _build_management_row(
     reasoning = result.get("reasoning", "") or ""
     patent_count = result.get("patent_count", 0) or 0
 
-    # Confidence Tier
-    if confidence >= 75:
-        tier = "High"
-    elif confidence >= 50:
-        tier = "Medium"
-    else:
-        tier = "Low"
-
-    # Risk Flag (priority order)
-    validation_decision = result.get("validation_decision", "") or ""
-    classification_disputed = result.get("classification_disputed", False)
-    validator_triggered = result.get("validator_triggered", False)
-
-    if validation_decision == "ESCALATE_FOR_HUMAN_REVIEW":
-        risk_flag = "Escalate"
-    elif classification_disputed:
-        risk_flag = "Contested"
-    elif validator_triggered and confidence < 70:
-        risk_flag = "Uncertain"
-    else:
-        risk_flag = "Clear"
-
-    # Action Required
-    if verdict == "deep tech" and risk_flag == "Clear":
-        action = "Approve"
-    elif verdict == "general tech" and risk_flag == "Clear":
-        action = "Reject"
-    elif verdict == "error":
-        action = "Needs Review"
-    else:
-        action = "Needs Review"
+    tier = _review.confidence_tier(confidence)
+    risk_flag = _review.risk_flag(result)
+    action = _review.action_required(verdict, risk_flag)
 
     # Key Reason — first ~200 chars
     key_reason = reasoning[:200] + "…" if len(reasoning) > 200 else reasoning
@@ -316,9 +289,10 @@ def _write_overview_sheet(
     non_error = max(1, total - errors)
 
     confidences = [r.get("confidence", 0) or 0 for r in results if r.get("classification") != "error"]
-    high_conf = sum(1 for c in confidences if c >= 75)
-    med_conf = sum(1 for c in confidences if 50 <= c < 75)
-    low_conf = sum(1 for c in confidences if c < 50)
+    tiers = [_review.confidence_tier(c) for c in confidences]
+    high_conf = tiers.count("High")
+    med_conf = tiers.count("Medium")
+    low_conf = tiers.count("Low")
     escalations = sum(1 for r in results if r.get("validation_decision") == "ESCALATE_FOR_HUMAN_REVIEW")
     disputed = sum(1 for r in results if r.get("classification_disputed"))
 
