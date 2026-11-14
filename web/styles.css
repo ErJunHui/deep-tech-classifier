@@ -37,11 +37,6 @@ body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); -
 button, input, select, textarea { font: inherit; color: inherit; }
 
 .v-workbench { --wb-rail: 200px; --wb-detail: 480px; position: relative; display: grid; grid-template-columns: var(--wb-rail) minmax(0, 1fr) min(var(--wb-detail), calc((100% - var(--wb-rail)) * 0.6)); height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
-/* Addition to the prototype CSS: one explicit full-height row. The empty overlay, pop and modal
-   containers are grid items that open a second auto row; without this the free height is split
-   between the two rows and the columns stop short of the window. Their content is absolutely
-   positioned, so that row stays 0 px tall. */
-.v-workbench { grid-template-rows: minmax(0, 1fr); }
 @media (min-width: 1600px) { .v-workbench { --wb-detail: 540px; } }
 @media (max-width: 1299px) { .v-workbench { --wb-rail: 176px; --wb-detail: 380px; } }
 @media (max-width: 1099px) { .v-workbench { --wb-rail: 160px; --wb-detail: 340px; } }
@@ -111,7 +106,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-status.is-running { background: var(--accent-soft); color: var(--accent); }
 .v-workbench .wb-status.is-stopped { background: var(--escalate-soft); color: var(--escalate); }
 .v-workbench .wb-status.is-complete { background: var(--deep-soft); color: var(--deep); }
-.v-workbench .wb-status.is-failed { background: var(--error-soft); color: var(--error); }
 .v-workbench .wb-cfg { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
 .v-workbench .wb-cfgtag { font-size: 11px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-2); background: var(--surface); }
 .v-workbench .wb-cfgtag.is-off { color: var(--text-3); text-decoration: line-through; }
@@ -262,8 +256,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-verdict.is-deep::before { background: var(--deep); }
 .v-workbench .wb-verdict.is-gen { color: var(--text-2); }
 .v-workbench .wb-verdict.is-gen::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--general); }
-.v-workbench .wb-verdict.is-error { color: var(--error); }
-.v-workbench .wb-verdict.is-error::before { background: var(--error); }
 .v-workbench .wb-was { align-items: center; gap: 3px; margin-left: 5px; font-size: 10.5px; color: var(--accent); vertical-align: middle; }
 .v-workbench .wb-conf { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
 .v-workbench .wb-conf-t { width: 28px; height: 4px; border-radius: 2px; background: var(--general-soft); overflow: hidden; }
@@ -599,3 +591,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .v-workbench *, .v-workbench *::before, .v-workbench *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition: none !important; }
   .v-workbench .wb-step::before, .v-workbench .wb-dot.is-running { animation: none !important; }
 }
+
+/* Additions to the prototype CSS (everything above is the prototype's, unchanged):
+   - .v-workbench grid-template-rows: one explicit full-height row. The empty overlay, pop and
+     modal containers are grid items that open a second auto row; without this the free height
+     is split between the two rows and the columns stop short of the window. Their content is
+     absolutely positioned, so that row stays 0 px tall.
+   - .wb-status.is-failed: a run that failed.
+   - .wb-status.is-interrupted: an interrupted run, styled as a stopped one.
+   - .wb-verdict.is-error: a row whose classification ended in an error. */
+.v-workbench { grid-template-rows: minmax(0, 1fr); }
+.v-workbench .wb-status.is-failed { background: var(--error-soft); color: var(--error); }
+.v-workbench .wb-status.is-interrupted { background: var(--escalate-soft); color: var(--escalate); }
+.v-workbench .wb-verdict.is-error { color: var(--error); }
+.v-workbench .wb-verdict.is-error::before { background: var(--error); }

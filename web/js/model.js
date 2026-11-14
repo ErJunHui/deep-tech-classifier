@@ -54,12 +54,11 @@ const ERROR_SEV = 2.5;
 
 /* Effective view of one row: the pipeline result plus the reviewer's current
    decision. decisionOverride, when given (null included), is used instead of
-   the row's history (computeIds passes the decision snapshot). total is part
-   of the shared signature; the view does not need it. A row without a result
+   the row's history (computeIds passes the decision snapshot). A row without a result
    has r, dec, verdict and action null. An error row (result.error) is never
    flagged or open, has no verdict or decision and its action is
    'Needs Review'; its risk is ignored. */
-export function rowView(row, total, decisionOverride) {
+export function rowView(row, decisionOverride) {
   const r = row.result || null;
   const idx = row.index + 1;
   const base = { row, r, idx, dec: null, error: false, flagged: false, open: false, verdict: null, reclassified: false, confirmed: false, action: null };
@@ -83,7 +82,7 @@ export function counts(rows) {
   };
   let sum = 0; let scored = 0;
   rows.forEach((row) => {
-    const v = rowView(row, rows.length);
+    const v = rowView(row);
     if (!v.r) return;
     out.done++;
     if (v.error) { out.errors++; return; }
@@ -123,11 +122,10 @@ export function computeIds(rows, { filters, sortKey, sortDir, running, snapshot 
   const views = {};
   const ids = [];
   rows.forEach((row) => {
-    const v = rowView(row, rows.length, snapshot ? (snapshot[row.index] || null) : undefined);
+    const v = rowView(row, snapshot ? (snapshot[row.index] || null) : undefined);
     views[row.index] = v;
     if (q && (row.name + ' ' + row.uen + ' ' + row.domain + ' ' + row.description).toLowerCase().indexOf(q) < 0) return;
-    if (!v.r) { if (!resultFilter) ids.push(row.index); return; }
-    if (v.error) { if (!resultFilter) ids.push(row.index); return; }
+    if (!v.r || v.error) { if (!resultFilter) ids.push(row.index); return; }
     if (f.risk.size && !f.risk.has(v.r.risk)) return;
     if (f.verdict.size && !f.verdict.has(v.verdict)) return;
     if (f.status.size && !((f.status.has('open') && v.open) || (f.status.has('reviewed') && v.confirmed) || (f.status.has('reclassified') && v.reclassified))) return;
@@ -182,21 +180,33 @@ export function formProblem(view, form) {
    pipeline skips them. file is the inspect dict from POST /api/files. */
 export const skippedCount = (file, mapping) => file.emptyCounts[mapping.company_name] || 0;
 
+/* Rows of the draft's file that would be classified (see startProblem). */
+function tickedCount(draft) {
+  const file = draft.file; const excluded = draft.excluded || new Set();
+  if (!file.table || !file.headers) return Math.max(0, file.rows - excluded.size);
+  const col = file.headers.indexOf(draft.cfg.mapping.company_name);
+  if (col < 0) return 0;
+  return file.table.filter((cells, i) => !excluded.has(i) && String(cells[col] == null ? '' : cells[col]).trim()).length;
+}
+
 /* Why the new run cannot start yet, and where the fix is: {fix, label, text},
    or null when it can start.
    The draft fields used:
      draft.file      the inspect dict from POST /api/files, or null before a
-                     file is chosen (only file.rows is read)
+                     file is chosen; file.table and file.headers (or, without
+                     a table, file.rows) are read
      draft.cfg       the run's Settings; cfg.provider and cfg.mapping are read
      draft.excluded  a Set of the file's 0-based table row indexes left out
+   A row counts as ticked when it is not excluded and its cell in the mapped
+   company name column is not blank (the pipeline skips blank names).
    setup is GET /api/setup: setup.providers[] holds {id, label, keyVar, keySet}. */
 export function startProblem(draft, setup) {
   const d = draft.cfg;
   if (!draft.file) return { fix: 'file', label: 'Choose an input file to start', text: 'Drop a spreadsheet on this column or choose one to see your companies here.' };
   if (!d.mapping.company_name) return { fix: 'map', label: 'Map the company name column to start', text: 'Choose which spreadsheet column holds the company names on the highlighted header.' };
-  const excluded = draft.excluded ? draft.excluded.size : 0;
-  if (draft.file.rows - excluded <= 0) return { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' };
+  if (!tickedCount(draft)) return { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' };
   const p = setup.providers.find((x) => x.id === d.provider);
-  if (p && !p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: 'Ask your admin to add ' + p.keyVar + ' to .env, or choose another provider in Analyst settings.' };
+  if (!p) return { fix: 'sheet', label: 'Choose a provider to start', text: 'The selected provider is not available. Choose another provider in Analyst settings.' };
+  if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: 'Ask your admin to add ' + p.keyVar + ' to .env, or choose another provider in Analyst settings.' };
   return null;
 }

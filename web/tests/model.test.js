@@ -75,7 +75,7 @@ test('currentDecision: last entry unless it is a restore or there is none', () =
 /* ---------- rowView ---------- */
 test('rowView: flagged undecided row is open and Needs Review', () => {
   const r = row(2, result({ risk: 'Contested' }));
-  const v = rowView(r, 5);
+  const v = rowView(r);
   assert.equal(v.row, r);
   assert.equal(v.r, r.result);
   assert.equal(v.idx, 3);
@@ -89,11 +89,11 @@ test('rowView: flagged undecided row is open and Needs Review', () => {
   assert.equal(v.action, 'Needs Review');
 });
 test('rowView: clear undecided row is not open and its action follows the verdict', () => {
-  const v = rowView(row(0, result({ verdict: 'general tech' })), 1);
+  const v = rowView(row(0, result({ verdict: 'general tech' })));
   assert.deepEqual([v.flagged, v.open, v.action], [false, false, 'Reject']);
 });
 test('rowView: change decision reclassifies and sets action from the new verdict', () => {
-  const v = rowView(row(0, result({ risk: 'Escalate', verdict: 'deep tech' }), [entry('change', 'general tech', 'why')]), 1);
+  const v = rowView(row(0, result({ risk: 'Escalate', verdict: 'deep tech' }), [entry('change', 'general tech', 'why')]));
   assert.equal(v.dec.type, 'change');
   assert.equal(v.verdict, 'general tech');
   assert.equal(v.reclassified, true);
@@ -103,24 +103,24 @@ test('rowView: change decision reclassifies and sets action from the new verdict
   assert.equal(v.action, 'Reject');
 });
 test('rowView: confirm decision is confirmed and closes a flagged row', () => {
-  const v = rowView(row(0, result({ risk: 'Uncertain' }), [entry('confirm', 'deep tech')]), 1);
+  const v = rowView(row(0, result({ risk: 'Uncertain' }), [entry('confirm', 'deep tech')]));
   assert.deepEqual([v.confirmed, v.reclassified, v.open, v.action], [true, false, false, 'Approve']);
 });
 test('rowView: restore clears the decision', () => {
-  const v = rowView(row(0, result({ risk: 'Escalate' }), [entry('change', 'general tech'), entry('restore', 'deep tech')]), 1);
+  const v = rowView(row(0, result({ risk: 'Escalate' }), [entry('change', 'general tech'), entry('restore', 'deep tech')]));
   assert.equal(v.dec, null);
   assert.equal(v.verdict, 'deep tech');
   assert.deepEqual([v.reclassified, v.confirmed, v.open, v.action], [false, false, true, 'Needs Review']);
 });
 test('rowView: a decision override replaces the history, null meaning none', () => {
   const r = row(0, result({ risk: 'Escalate' }), [entry('change', 'general tech')]);
-  assert.equal(rowView(r, 1, null).open, true);
-  assert.equal(rowView(r, 1, null).verdict, 'deep tech');
-  const v = rowView(row(0, result({ risk: 'Escalate' })), 1, entry('confirm', 'deep tech'));
+  assert.equal(rowView(r, null).open, true);
+  assert.equal(rowView(r, null).verdict, 'deep tech');
+  const v = rowView(row(0, result({ risk: 'Escalate' })), entry('confirm', 'deep tech'));
   assert.equal(v.confirmed, true);
 });
 test('rowView: error row is never open and has no verdict', () => {
-  const v = rowView(row(1, errorResult({ risk: 'Escalate' })), 2);
+  const v = rowView(row(1, errorResult({ risk: 'Escalate' })));
   assert.equal(v.error, true);
   assert.equal(v.flagged, false);
   assert.equal(v.open, false);
@@ -131,7 +131,7 @@ test('rowView: error row is never open and has no verdict', () => {
   assert.equal(v.idx, 2);
 });
 test('rowView: pending row has no result, verdict or action', () => {
-  const v = rowView(row(4, null, [], { step: 'Enrichment' }), 5);
+  const v = rowView(row(4, null, [], { step: 'Enrichment' }));
   assert.deepEqual([v.r, v.dec, v.verdict, v.action, v.error, v.open, v.flagged, v.idx], [null, null, null, null, false, false, false, 5]);
 });
 
@@ -289,8 +289,8 @@ test('computeIds: confidence bin 9 includes 100', () => {
 
 /* ---------- decision form ---------- */
 test('formProblem: change on Clear needs a note; change on flagged does not', () => {
-  const clear = rowView(row(0, result({ risk: 'Clear' })), 1);
-  const flagged = rowView(row(1, result({ risk: 'Contested' })), 2);
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  const flagged = rowView(row(1, result({ risk: 'Contested' })));
   const note = 'A note is required to overturn a Clear verdict. It is written to the workbook.';
   assert.equal(formProblem(clear, { choice: '', note: '' }), 'Choose an outcome.');
   assert.equal(formProblem(clear, { choice: 'change', note: '' }), note);
@@ -300,8 +300,8 @@ test('formProblem: change on Clear needs a note; change on flagged does not', ()
   assert.equal(formProblem(flagged, { choice: 'change', note: '' }), '');
 });
 test('needsNote: only a change on a Clear row', () => {
-  const clear = rowView(row(0, result({ risk: 'Clear' })), 1);
-  const flagged = rowView(row(1, result({ risk: 'Uncertain' })), 2);
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  const flagged = rowView(row(1, result({ risk: 'Uncertain' })));
   assert.deepEqual([needsNote(clear, 'change'), needsNote(clear, 'confirm'), needsNote(flagged, 'change')], [true, false, false]);
 });
 
@@ -337,6 +337,63 @@ test('startProblem: file, then mapping, then ticked rows, then key', () => {
 
   draft.cfg.provider = 'openai';
   assert.equal(startProblem(draft, setup), null);
+});
+const SETUP = { providers: [{ id: 'openai', label: 'OpenAI', keyVar: 'OPENAI_API_KEY', keySet: true, batch: false }] };
+const named = (excluded, file) => ({
+  cfg: { provider: 'openai', mapping: { company_name: 'Company' } },
+  file: file || { rows: 3, headers: ['About', 'Company'], table: [['x', 'Alpha'], ['y', '   '], ['z', 'Gamma']], emptyCounts: { About: 0, Company: 1 } },
+  excluded: new Set(excluded),
+});
+test('startProblem: a provider not in setup blocks the start', () => {
+  const draft = named([]);
+  draft.cfg.provider = 'nosuch';
+  assert.deepEqual(startProblem(draft, SETUP), {
+    fix: 'sheet', label: 'Choose a provider to start', text: 'The selected provider is not available. Choose another provider in Analyst settings.',
+  });
+  assert.equal(startProblem(named([]), SETUP), null);
+});
+test('startProblem: rows with a blank company name do not count as ticked', () => {
+  const p = startProblem(named([0, 2]), SETUP);
+  assert.deepEqual(p, { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' });
+  assert.equal(startProblem(named([0]), SETUP), null);
+  assert.equal(startProblem(named([2]), SETUP), null);
+});
+test('startProblem: a file without its table counts rows less exclusions', () => {
+  const noTable = { rows: 3, headers: ['About', 'Company'], emptyCounts: { About: 0, Company: 1 } };
+  assert.equal(startProblem(named([0, 2], noTable), SETUP), null);
+  assert.equal(startProblem(named([0, 1, 2], noTable), SETUP).fix, 'rows');
+});
+
+/* Error rows sort by stand-in values: verdict '', risk between Uncertain and
+   Clear, action 'Needs Review', and their real patent count and cost. */
+const sortRows = () => [
+  row(0, result({ risk: 'Clear', verdict: 'deep tech', conf: 90, cost: 0.2, patents: { count: 3 } })),
+  row(1, errorResult({ risk: 'Escalate', conf: 0, cost: null, patents: { count: 0 } })),
+  row(2, result({ risk: 'Escalate', verdict: 'general tech', conf: 40, cost: 0.1, patents: { count: 1 } })),
+  row(3, result({ risk: 'Uncertain', verdict: 'deep tech', conf: 55, cost: 0, patents: { count: 0 } }), [entry('confirm', 'deep tech')]),
+  row(4, result({ risk: 'Clear', verdict: 'general tech', conf: 85, cost: null, patents: { count: 2 } })),
+  row(5, null),
+];
+const sorted = (key, dir) => ids(sortRows(), { sortKey: key, sortDir: dir });
+test('computeIds with an error row: risk sorts it after Uncertain and before Clear', () => {
+  assert.deepEqual(sorted('risk', 1), [2, 3, 1, 0, 4, 5]);
+  assert.deepEqual(sorted('risk', -1), [0, 4, 1, 3, 2, 5]);
+});
+test('computeIds with an error row: verdict sorts it before deep tech ascending, last descending', () => {
+  assert.deepEqual(sorted('verdict', 1), [1, 0, 3, 2, 4, 5]);
+  assert.deepEqual(sorted('verdict', -1), [2, 4, 0, 3, 1, 5]);
+});
+test('computeIds with an error row: action sorts it with the Needs Review rows', () => {
+  assert.deepEqual(sorted('action', 1), [0, 3, 1, 2, 4, 5]);
+  assert.deepEqual(sorted('action', -1), [4, 1, 2, 0, 3, 5]);
+});
+test('computeIds with an error row: patents uses its real count', () => {
+  assert.deepEqual(sorted('patents', 1), [1, 3, 2, 4, 0, 5]);
+  assert.deepEqual(sorted('patents', -1), [0, 4, 2, 1, 3, 5]);
+});
+test('computeIds with an error row: cost puts it with the unknown costs, below $0', () => {
+  assert.deepEqual(sorted('cost', 1), [1, 4, 3, 2, 0, 5]);
+  assert.deepEqual(sorted('cost', -1), [0, 2, 3, 1, 4, 5]);
 });
 test('skippedCount: blank cells in the company name column', () => {
   const file = { emptyCounts: { Company: 3, About: 7 } };
