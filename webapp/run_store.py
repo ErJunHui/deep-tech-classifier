@@ -18,7 +18,10 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+
+import pandas as pd
+from openpyxl import Workbook
 
 from data.reader import read_companies
 from webapp.settings_map import to_pipeline_config
@@ -90,6 +93,51 @@ def _write_json_atomic(path: Path, value: Any) -> None:
         raise
 
 
+def _check_exclude(exclude: Any) -> List[int]:
+    """exclude as sorted distinct ints; ValueError when it is not a list of ints."""
+    if exclude is None:
+        return []
+    if not isinstance(exclude, list):
+        raise ValueError("exclude must be a list of row numbers.")
+    for entry in exclude:
+        if isinstance(entry, bool) or not isinstance(entry, int):
+            raise ValueError(f"exclude must list row numbers, not {entry!r}.")
+    return sorted(set(exclude))
+
+
+def _copy_without(source: Path, dest: Path, exclude: List[int]) -> None:
+    """
+    Write source to dest without the data rows in exclude, in the same format
+    and with the headers as pandas reads them (the names the mapping uses).
+    """
+    suffix = source.suffix.lower()
+    if suffix == ".xls":
+        raise ValueError(f"Rows cannot be left out of an .xls file. Save {source.name} as .xlsx "
+                         "and upload it again, or tick every row.")
+    # The same pandas calls as data/reader.py and webapp/files.py.
+    df = pd.read_csv(source, dtype=str) if suffix == ".csv" else pd.read_excel(source, dtype=str)
+    for index in exclude:
+        if not 0 <= index < len(df):
+            raise ValueError(f"Row {index} is not in {source.name}, which has {len(df)} rows (0 to {len(df) - 1}).")
+    if len(exclude) >= len(df):
+        raise ValueError("Tick at least one company to start")
+    kept = df.drop(index=df.index[exclude])
+    if suffix == ".csv":
+        kept.to_csv(dest, index=False)
+        return
+    wb = Workbook()
+    ws = wb.active
+    ws.append(list(kept.columns))
+    for row in kept.itertuples(index=False, name=None):
+        ws.append([None if pd.isna(value) else value for value in row])
+    # openpyxl takes a string starting with "=" for a formula; keep it text.
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.data_type == "f":
+                cell.data_type = "s"
+    wb.save(dest)
+
+
 def _sort_key(run_id: str) -> Tuple[int, ...]:
     """run_20261113_142233_2 -> (20261113, 142233, 2); no suffix counts as 1."""
     parts = [int(p) for p in run_id[len("run_"):].split("_") if p]
@@ -115,15 +163,22 @@ class RunStore:
 
     # --- folders and meta ---
 
-    def create(self, source_file: Path, settings: Dict[str, Any], base_config: Dict[str, Any]) -> Dict[str, Any]:
+    def create(self, source_file: Path, settings: Dict[str, Any], base_config: Dict[str, Any],
+               exclude: Optional[List[int]] = None) -> Dict[str, Any]:
         """
         Lay out a new run folder for source_file and return its meta.
 
         Copies the input, writes config.json (the pipeline config for these
         settings) and meta.json with status "running". If the input cannot be
         read with that config, the folder is removed and the error re-raised.
+
+        exclude lists 0-based data rows of source_file to leave out of the
+        run's copy (same format and headers). ValueError, with a message fit
+        to show the user, when it is not a list of row numbers in range, it
+        leaves no row, or the file is .xls (which cannot be written).
         """
         source_file = Path(source_file)
+        exclude = _check_exclude(exclude)
         config = to_pipeline_config(settings, base_config, self.project_root)
         self.root.mkdir(parents=True, exist_ok=True)
         run_id, folder = self._new_folder()
@@ -131,7 +186,10 @@ class RunStore:
             for sub in _SUBFOLDERS:
                 (folder / sub).mkdir()
             input_path = folder / "input" / source_file.name
-            shutil.copyfile(source_file, input_path)
+            if exclude:
+                _copy_without(source_file, input_path, exclude)
+            else:
+                shutil.copyfile(source_file, input_path)
             _write_json_atomic(folder / "config.json", config)
             companies = read_companies(str(input_path), config)
             meta = {
@@ -237,15 +295,25 @@ class RunStore:
         run_state.json is unreadable (the pipeline rewrites it in place), the
         pipeline run id last read for this run is used.
         """
+        results, consumed, _ = self.read_results_since(run_id, 0)
+        return results, consumed
+
+    def read_results_since(self, run_id: str, cursor: int) -> Tuple[Dict[int, Dict[str, Any]], int, Set[int]]:
+        """
+        read_results plus the row indexes written on lines from cursor on (a
+        cursor is a line count read_results returned). A cursor past the end
+        means the checkpoint was replaced, and every row counts as written.
+        """
         pipeline_run_id = self._run_state(run_id).get("run_id")
         if isinstance(pipeline_run_id, str) and _PIPELINE_RUN_ID.fullmatch(pipeline_run_id):
             self._pipeline_run_ids[run_id] = pipeline_run_id
         else:
             pipeline_run_id = self._pipeline_run_ids.get(run_id)
             if pipeline_run_id is None:
-                return {}, 0
+                return {}, 0, set()
         path = self.run_dir(run_id) / "checkpoints" / "llm" / f"llm_progress_{pipeline_run_id}.jsonl"
         results: Dict[int, Dict[str, Any]] = {}
+        changed: Set[int] = set()
         consumed = 0
         for entry in _iter_complete_lines(path):
             consumed += 1
@@ -254,7 +322,11 @@ class RunStore:
             index, result = entry.get("index"), entry.get("result")
             if isinstance(index, int) and not isinstance(index, bool) and isinstance(result, dict):
                 results[index] = result
-        return results, consumed
+                if consumed > cursor:
+                    changed.add(index)
+        if cursor > consumed:
+            changed = set(results)
+        return results, consumed, changed
 
     def read_progress(self, run_id: str) -> Tuple[Dict[int, str], str]:
         """({row index: latest step}, latest phase text) from progress.jsonl."""

@@ -88,6 +88,80 @@ class RunStoreTest(unittest.TestCase):
         self.assertEqual([c["company_name"] for c in companies], ["Alpha", "Beta"])
         self.assertEqual(companies[0]["description"], "Quantum sensors")
 
+    def test_create_with_empty_exclude_copies_the_file_unchanged(self):
+        meta = self.store.create(self.source, self.settings, _template(), exclude=[])
+        folder = self.store.run_dir(meta["id"])
+        self.assertEqual((folder / "input" / "companies.csv").read_bytes(), self.source.read_bytes())
+
+    def test_create_leaves_out_excluded_csv_rows(self):
+        self.source.write_text(CSV + "Gamma,Lasers,Photonics,U3\n", encoding="utf-8")
+        meta = self.store.create(self.source, self.settings, _template(), exclude=[1])
+        self.assertEqual(meta["rows"], 2)
+        self.assertEqual(meta["file"], "companies.csv")
+        written = self.store.run_dir(meta["id"]) / "input" / "companies.csv"
+        self.assertEqual(written.read_text(encoding="utf-8").splitlines(),
+                         ["Company,About,Sector,UEN", "Alpha,Quantum sensors,Hardware,U1", "Gamma,Lasers,Photonics,U3"])
+        self.assertEqual([c["company_name"] for c in self.store.companies(meta["id"])], ["Alpha", "Gamma"])
+
+    def test_create_leaves_out_excluded_xlsx_rows(self):
+        from openpyxl import Workbook, load_workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Company", "About", "Sector", "UEN"])
+        ws.append(["Alpha", "=1+1", "Hardware", "U1"])
+        ws.append(["Beta", None, "Biotech", "U2"])
+        ws.append(["Gamma", "Lasers", "Photonics", "U3"])
+        ws["B2"].data_type = "s"  # text that looks like a formula
+        source = self.tmp / "upload" / "companies.xlsx"
+        wb.save(source)
+        meta = self.store.create(source, self.settings, _template(), exclude=[2, 1])
+        self.assertEqual(meta["rows"], 1)
+        written = self.store.run_dir(meta["id"]) / "input" / "companies.xlsx"
+        cells = [[c.value for c in row] for row in load_workbook(written).active.iter_rows()]
+        self.assertEqual(cells, [["Company", "About", "Sector", "UEN"], ["Alpha", "=1+1", "Hardware", "U1"]])
+        # Stored as text, not a formula: the reader sees the same cell.
+        self.assertEqual(self.store.companies(meta["id"])[0]["description"], "=1+1")
+
+    def test_create_rejects_a_bad_exclude_and_leaves_no_folder(self):
+        cases = {
+            "every row": ([0, 1], "Tick at least one company to start"),
+            "out of range": ([2], "Row 2 is not in companies.csv, which has 2 rows (0 to 1)."),
+            "negative": ([-1], "Row -1 is not in companies.csv, which has 2 rows (0 to 1)."),
+            "not a number": (["0"], "exclude must list row numbers, not '0'."),
+            "a bool": ([True], "exclude must list row numbers, not True."),
+            "not a list": (3, "exclude must be a list of row numbers."),
+        }
+        for label, (exclude, message) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError) as ctx:
+                    self.store.create(self.source, self.settings, _template(), exclude=exclude)
+                self.assertEqual(str(ctx.exception), message)
+                self.assertEqual(self.store.list_runs(), [])
+
+    def test_create_refuses_to_leave_rows_out_of_an_xls_file(self):
+        source = self.tmp / "upload" / "companies.xls"
+        source.write_bytes(b"not read")
+        with self.assertRaises(ValueError) as ctx:
+            self.store.create(source, self.settings, _template(), exclude=[0])
+        self.assertIn(".xlsx", str(ctx.exception))
+        self.assertEqual(self.store.list_runs(), [])
+
+    def test_read_results_since_names_the_rows_written_after_the_cursor(self):
+        run_id = self._create()["id"]
+        self._write_run_state(run_id)
+        path = self._checkpoint(run_id)
+        path.write_text(self._line(0, "deep tech") + self._line(1, "error"), encoding="utf-8")
+        results, cursor, changed = self.store.read_results_since(run_id, 0)
+        self.assertEqual((sorted(results), cursor, changed), ([0, 1], 2, {0, 1}))
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("not json\n" + self._line(1, "general tech") + '{"index": 0')
+        results, cursor, changed = self.store.read_results_since(run_id, 2)
+        self.assertEqual((cursor, changed), (4, {1}))
+        self.assertEqual(results[1]["classification"], "general tech")
+        self.assertEqual(self.store.read_results_since(run_id, 4)[2], set())
+        # A cursor past the end (the checkpoint was replaced) names every row.
+        self.assertEqual(self.store.read_results_since(run_id, 99)[2], {0, 1})
+
     def test_id_collision_gets_suffix(self):
         fixed = datetime(2026, 11, 13, 14, 22, 33)
         with mock.patch.object(run_store, "_now", return_value=fixed):

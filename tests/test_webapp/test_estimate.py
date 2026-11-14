@@ -261,6 +261,14 @@ class EstimateRequestTest(unittest.TestCase):
         with self.assertRaises(est.EstimateError):
             est.estimate_request({"settings": {}})
 
+    def test_request_rejects_more_than_a_million_rows(self):
+        self.assertEqual(est.estimate_request({"rows": 1_000_000}), estimate(clean_settings({}), 1_000_000))
+        for rows in (1_000_001, 1e300, 10 ** 300):
+            with self.subTest(rows=rows):
+                with self.assertRaises(est.EstimateError) as ctx:
+                    est.estimate_request({"rows": rows})
+                self.assertEqual(str(ctx.exception), "rows must be at most 1,000,000")
+
     def test_request_accepts_whole_float_rows(self):
         self.assertEqual(est.estimate_request({"rows": 12.0}), estimate(clean_settings({}), 12))
         self.assertEqual(est.estimate_request({"rows": 0}), estimate(clean_settings({}), 0))

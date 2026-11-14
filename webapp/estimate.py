@@ -119,8 +119,13 @@ class EstimateError(ValueError):
     """An estimate request that cannot be answered; the message says why."""
 
 
+# More than any spreadsheet the app takes; a huge finite count can make the
+# cost overflow to infinity, which is not valid JSON.
+MAX_ROWS = 1_000_000
+
+
 def _whole_rows(rows: Any) -> int:
-    """rows as a non-negative int; a float is accepted only when it is whole."""
+    """rows as an int from 0 to MAX_ROWS; a float is accepted only when it is whole."""
     if isinstance(rows, bool) or not isinstance(rows, (int, float)):
         raise EstimateError(f"rows must be a whole number, not {rows!r}")
     if isinstance(rows, float):
@@ -129,10 +134,8 @@ def _whole_rows(rows: Any) -> int:
         rows = int(rows)
     if rows < 0:
         raise EstimateError(f"rows must not be negative, not {rows!r}")
-    try:
-        float(rows)  # the estimate multiplies prices by rows
-    except OverflowError:
-        raise EstimateError("rows is too large") from None
+    if rows > MAX_ROWS:
+        raise EstimateError(f"rows must be at most {MAX_ROWS:,}")
     return rows
 
 
@@ -145,7 +148,7 @@ def estimate_request(body: Any) -> Dict[str, Any]:
 
     Raises:
         EstimateError: body is not an object, the provider or tier is unknown,
-            or rows is not a non-negative whole number.
+            or rows is not a whole number from 0 to MAX_ROWS.
     """
     if not isinstance(body, dict):
         raise EstimateError("The request body must be a JSON object")
