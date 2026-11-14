@@ -134,7 +134,9 @@ def write_results(
     `decisions` maps a position in `companies` to a reviewer decision
     {"verdict", "note", "at", "reclassified"}. When it is given (even empty)
     the sheets gain reviewer columns; when None the workbook is as before.
+    Raises ValueError for malformed decisions, before anything is written.
     """
+    _check_decisions(decisions, len(companies))
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     rows = _build_flat_rows(companies, results, decisions)
@@ -155,6 +157,7 @@ def write_results(
     _write_management_sheet(wb, results, companies, decisions)
     _write_detail_sheet(wb, results_df)
     _write_legend_sheet(wb, run_stats.get("model"), reviewed=decisions is not None)
+    _store_formulas_as_text(wb)
     wb.save(output_path)
 
     logger.info(f"Results written to {output_path}")
@@ -171,6 +174,7 @@ def write_incremental(
     Writes Management View and Full Detail sheets (no Overview — run not yet complete).
     `decisions` is as for write_results.
     """
+    _check_decisions(decisions, len(all_companies))
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
     rows = _build_flat_rows(all_companies, all_results, decisions)
@@ -185,6 +189,7 @@ def write_incremental(
     _write_management_sheet(wb, all_results, all_companies, decisions)
     _write_detail_sheet(wb, df)
     _write_legend_sheet(wb, reviewed=decisions is not None)
+    _store_formulas_as_text(wb)
     wb.save(output_path)
 
     logger.debug(f"Incremental write: {len(rows)} rows to {output_path}")
@@ -193,6 +198,27 @@ def write_incremental(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _check_decisions(decisions: Optional[Dict[int, Dict[str, Any]]], count: int) -> None:
+    """Raise ValueError unless every key is a row position (an int, not a bool) and every decision has a verdict."""
+    if decisions is None:
+        return
+    for key, decision in decisions.items():
+        if not isinstance(key, int) or isinstance(key, bool):
+            raise ValueError(f"Decision key {key!r} is not a row position (an int)")
+        if not 0 <= key < count:
+            raise ValueError(f"Decision key {key} is outside the {count} companies (0 to {count - 1})")
+        if not isinstance(decision, dict) or "verdict" not in decision:
+            raise ValueError(f"Decision for row {key} has no verdict")
+
+
+def _store_formulas_as_text(wb) -> None:
+    """The writer never writes formulas: store any string openpyxl took for one (e.g. '=1+1') as text."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f" and isinstance(cell.value, str):
+                    cell.data_type = "s"
 
 # Columns that contain dict values and should use human-readable formatting
 _DICT_COLUMNS = {"key_signals", "criteria", "cpc_analysis", "self_audit", "checks"}
@@ -272,7 +298,7 @@ def _build_management_row(
     final_verdict = reviewer_verdict or verdict
     if kind:
         # A reviewer has settled the row: act on their verdict, nothing left to review
-        action = _review.action_required(final_verdict, "Clear")
+        action = _review.action_for_verdict(final_verdict)
 
     # Key Reason — first ~200 chars
     key_reason = reasoning[:200] + "…" if len(reasoning) > 200 else reasoning
@@ -542,10 +568,6 @@ def _write_management_sheet(
                 elif mgmt_row[col_name] == "error":
                     cell.fill = FILL_GREY
 
-            # Reviewer Note is free text: never let Excel read it as a formula
-            elif col_name == "Reviewer Note":
-                _as_text(cell)
-
             # Risk Flag colour (column 6)
             elif col_name == "Risk Flag":
                 if risk_flag == "Escalate":
@@ -593,12 +615,6 @@ def _write_management_sheet(
         ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(col_name, 15)
 
 
-def _as_text(cell) -> None:
-    """Store a string cell as text, so a value like '=1+1' is not written as a formula."""
-    if isinstance(cell.value, str):
-        cell.data_type = "s"
-
-
 def _write_detail_sheet(wb, results_df: pd.DataFrame) -> None:
     """Style the Full Detail sheet: frozen header, auto-filter, bold header, wrap dict columns."""
     ws = wb["Full Detail"]
@@ -627,12 +643,6 @@ def _write_detail_sheet(wb, results_df: pd.DataFrame) -> None:
             for cell in row:
                 if cell.column in wrap_col_indices:
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
-
-    # Reviewer notes are free text: never let Excel read one as a formula
-    if "reviewer_note" in col_names:
-        note_col = col_names.index("reviewer_note") + 1
-        for (cell,) in ws.iter_rows(min_row=2, min_col=note_col, max_col=note_col):
-            _as_text(cell)
 
 
 def _write_legend_sheet(wb, model: Optional[Dict[str, Any]] = None, reviewed: bool = False) -> None:

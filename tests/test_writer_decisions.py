@@ -69,6 +69,25 @@ class WriterDecisionsTests(unittest.TestCase):
         self.assertEqual(header, writer.MANAGEMENT_COLUMNS)
         detail = [c.value for c in wb["Full Detail"][1]]
         self.assertEqual(detail, ["Company Name", "UEN"] + writer.RESULT_COLUMNS)
+        alpha = _by_company(wb["Management View"], "Alpha")
+        self.assertEqual(alpha, {
+            "Company Name": "Alpha", "UEN": "U1", "Verdict": "general tech",
+            "Criteria 1: Innovation": "N/A — criteria not assessed",
+            "Criteria 2: Scientific Foundation": "N/A — criteria not assessed",
+            "Criteria 3: Proprietary IP": "N/A — criteria not assessed",
+            "Confidence Score": 60, "Confidence Tier": "Medium", "Risk Flag": "Clear",
+            "Action Required": "Reject", "Key Reason": None, "Full Reasoning": None,
+            "Patents Found": 0,
+        })
+        gamma = _by_company(wb["Management View"], "Gamma")
+        self.assertEqual((gamma["Risk Flag"], gamma["Action Required"]), ("Escalate", "Needs Review"))
+        detail = next(r for r in _rows(wb["Full Detail"]) if r["Company Name"] == "Gamma")
+        expected = {col: None for col in writer.RESULT_COLUMNS}
+        expected.update({
+            "Company Name": "Gamma", "UEN": "U3", "classification": "deep tech", "confidence": 40,
+            "validator_triggered": True, "validation_decision": "ESCALATE_FOR_HUMAN_REVIEW",
+        })
+        self.assertEqual(detail, expected)
         overview = _overview(wb["Overview"])
         self.assertNotIn("Review", overview)
         self.assertNotIn("Verdicts Confirmed", overview)
@@ -168,12 +187,14 @@ class WriterDecisionsTests(unittest.TestCase):
         writer.write_incremental(self.path, self.companies, self.results)
         wb = load_workbook(self.path)
         self.assertEqual([c.value for c in wb["Management View"][1]], writer.MANAGEMENT_COLUMNS)
-        self.assertEqual([c.value for c in wb["Full Detail"][1]][-4:], writer.RESULT_COLUMNS[-4:])
+        self.assertEqual([c.value for c in wb["Full Detail"][1]], ["Company Name", "UEN"] + writer.RESULT_COLUMNS)
 
     def test_note_that_looks_like_a_formula_is_written_as_text(self):
-        notes = {0: "=HYPERLINK(\"http://x\",\"y\")", 1: "+1", 2: "@SUM(A1)"}
+        self.companies.append(_company("Delta", "U4"))
+        self.results.append({"classification": "deep tech", "confidence": 80})
+        notes = {0: "=HYPERLINK(\"http://x\",\"y\")", 1: "+1", 2: "@SUM(A1)", 3: "-1+2"}
         wb = self._write({i: _decision("deep tech", n, False) for i, n in notes.items()})
-        names = {0: "Alpha", 1: "Beta", 2: "Gamma"}
+        names = {0: "Alpha", 1: "Beta", 2: "Gamma", 3: "Delta"}
         mgmt_header = [c.value for c in wb["Management View"][1]]
         note_col = mgmt_header.index("Reviewer Note")
         for row in wb["Management View"].iter_rows(min_row=2):
@@ -185,6 +206,90 @@ class WriterDecisionsTests(unittest.TestCase):
         for i, row in enumerate(wb["Full Detail"].iter_rows(min_row=2)):
             self.assertEqual(row[note_col].value, notes[i])
             self.assertEqual(row[note_col].data_type, "s")
+
+    # --- malformed decisions -------------------------------------------------
+
+    def _assert_rejected(self, write, decisions):
+        with self.assertRaises(ValueError) as ctx:
+            write(decisions)
+        self.assertTrue(str(ctx.exception))
+        self.assertFalse(os.path.exists(self.path))
+
+    def _write_full(self, decisions):
+        writer.write_results(self.path, self.companies, self.results, {}, decisions=decisions)
+
+    def _write_incremental(self, decisions):
+        writer.write_incremental(self.path, self.companies, self.results, decisions=decisions)
+
+    def test_string_key_is_rejected(self):
+        self._assert_rejected(self._write_full, {"0": _decision("deep tech", "", False)})
+        self._assert_rejected(self._write_incremental, {"0": _decision("deep tech", "", False)})
+
+    def test_bool_key_is_rejected(self):
+        self._assert_rejected(self._write_full, {True: _decision("deep tech", "", False)})
+
+    def test_out_of_range_key_is_rejected(self):
+        self._assert_rejected(self._write_full, {3: _decision("deep tech", "", False)})
+        self._assert_rejected(self._write_incremental, {-1: _decision("deep tech", "", False)})
+
+    def test_decision_without_verdict_is_rejected(self):
+        self._assert_rejected(self._write_full, {0: {"note": "x", "reclassified": False}})
+        self._assert_rejected(self._write_incremental, {0: {"note": "x"}})
+
+    def test_existing_file_is_untouched_when_decisions_are_rejected(self):
+        with open(self.path, "wb") as f:
+            f.write(b"previous")
+        with self.assertRaises(ValueError):
+            self._write_full({"0": _decision("deep tech", "", False)})
+        with open(self.path, "rb") as f:
+            self.assertEqual(f.read(), b"previous")
+
+    def test_minimal_decision_treats_missing_fields_as_blank(self):
+        wb = self._write({0: {"verdict": "deep tech"}})
+        alpha = _by_company(wb["Management View"], "Alpha")
+        self.assertEqual(alpha["Reviewer Decision"], "Confirmed")
+        self.assertIn(alpha["Reviewer Note"], (None, ""))
+        self.assertIn(alpha["Reviewed At"], (None, ""))
+
+
+FORMULA_LIKE = "=HYPERLINK(\"http://x\",\"y\")"
+
+
+class TextCellsTests(unittest.TestCase):
+    """No string cell is ever stored as a formula, with or without decisions."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.path = os.path.join(self.tmp, "out.xlsx")
+        self.companies = [{"company_name": FORMULA_LIKE, "uen": "U1",
+                           "_original_row": {"Company Name": FORMULA_LIKE, "Sector": "=1+1"}}]
+        self.results = [{"classification": "deep tech", "confidence": 80, "reasoning": "=1+1"}]
+
+    def _assert_text(self, cell, value):
+        self.assertEqual((cell.value, cell.data_type), (value, "s"))
+
+    def _check(self, wb):
+        mgmt = wb["Management View"]
+        header = [c.value for c in mgmt[1]]
+        row = mgmt[2]
+        self._assert_text(row[header.index("Company Name")], FORMULA_LIKE)
+        self._assert_text(row[header.index("Key Reason")], "=1+1")
+        self._assert_text(row[header.index("Full Reasoning")], "=1+1")
+        detail = wb["Full Detail"]
+        header = [c.value for c in detail[1]]
+        row = detail[2]
+        self._assert_text(row[header.index("Company Name")], FORMULA_LIKE)
+        self._assert_text(row[header.index("Sector")], "=1+1")
+        self._assert_text(row[header.index("reasoning")], "=1+1")
+
+    def test_write_results_without_decisions(self):
+        writer.write_results(self.path, self.companies, self.results, {})
+        self._check(load_workbook(self.path))
+
+    def test_write_incremental(self):
+        writer.write_incremental(self.path, self.companies, self.results)
+        self._check(load_workbook(self.path))
 
 
 if __name__ == "__main__":

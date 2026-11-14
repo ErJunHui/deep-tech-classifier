@@ -32,11 +32,17 @@ def risk_flag(result: Dict[str, Any]) -> str:
     return "Clear"
 
 
+def action_for_verdict(verdict: str) -> str:
+    """Approve deep tech, reject general tech; any other verdict needs review."""
+    if verdict == "deep tech":
+        return "Approve"
+    if verdict == "general tech":
+        return "Reject"
+    return "Needs Review"
+
+
 def action_required(verdict: str, risk: str) -> str:
     """Approve clear deep tech, reject clear general tech; everything else needs review."""
     if risk == "Clear":
-        if verdict == "deep tech":
-            return "Approve"
-        if verdict == "general tech":
-            return "Reject"
+        return action_for_verdict(verdict)
     return "Needs Review"

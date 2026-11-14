@@ -32,6 +32,13 @@ class ReviewRulesTest(unittest.TestCase):
         self.assertEqual(action_required("deep tech", "Uncertain"), "Needs Review")
         self.assertEqual(action_required("error", "Clear"), "Needs Review")
 
+    def test_action_for_verdict(self):
+        from pipeline.review import action_for_verdict
+        self.assertEqual(action_for_verdict("deep tech"), "Approve")
+        self.assertEqual(action_for_verdict("general tech"), "Reject")
+        self.assertEqual(action_for_verdict("error"), "Needs Review")
+        self.assertEqual(action_for_verdict(""), "Needs Review")
+
 
 if __name__ == "__main__":
     unittest.main()
