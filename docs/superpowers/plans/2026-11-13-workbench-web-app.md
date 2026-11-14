@@ -678,7 +678,7 @@ The frontend is a port of `workbench.js` into modules, with the simulation remov
 - Produces from `web/js/model.js` (ES module, no DOM access):
   - Formatters, copied in behaviour from `workbench.js:550-570`: `esc`, `clamp`, `pad`, `money`, `fmtDur`, `confWord`, `signed`, `flip`, `vLabel`, `vLow`, `actionFor`, `hhmm(date)`, `dateLabel(iso, now)` (`Today, 08:42` for today, otherwise `2 Nov 2026`).
   - `currentDecision(history)` — same rule as the server.
-  - `rowView(row, total, decisionOverride?) -> {row, r, idx, dec, error, flagged, open, verdict, reclassified, confirmed, action}` — `workbench.js:690`, plus `error: true` rows: `flagged false`, `open false`, `action 'Needs Review'`, `verdict null`.
+  - `rowView(row, decisionOverride?) -> {row, r, idx, dec, error, flagged, open, verdict, reclassified, confirmed, action}` — `workbench.js:690`, plus `error: true` rows: `flagged false`, `open false`, `action 'Needs Review'`, `verdict null`.
   - `counts(rows) -> {total, done, deep, general, errors, open, confirmed, reclassified, cost, costUnknown, avg, risk}` — `workbench.js:703`; error rows add to `done` and `errors` only.
   - `newFilters()`, `anyFilter(f)`, `computeIds(rows, {filters, sortKey, sortDir, running, snapshot}) -> number[]` — `workbench.js:863`, including the rule that priority sort falls back to input order while running, and that sorting uses the decision snapshot. Error rows sort after flagged rows and before clear rows in priority order, and match no risk/verdict/status/bin filter.
   - `formProblem(view, form)`, `needsNote(view, choice)` — `workbench.js:1205`.
