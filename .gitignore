@@ -9,6 +9,8 @@ lib/**/.env
 # Runtime outputs
 checkpoints/
 logs/
+runs/
+uploads/
 *.xlsx
 *.csv
 
