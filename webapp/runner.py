@@ -12,24 +12,31 @@ for them. stop() releases it while it waits for the process to die.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import IO, Dict, List, Optional
 
 from webapp.run_store import RunStore
 
+logger = logging.getLogger(__name__)
+
 _FATAL = "[FATAL]"
+# process.log is opened before the first launch and never removed: a run that
+# has it has been launched, even across a server restart.
+_LOG = "process.log"
 _STOP_WAIT_S = 10
 _LOG_TAIL_BYTES = 64 * 1024
 _RESUMABLE = ("stopped", "interrupted", "failed")
 
 
 class RunnerError(Exception):
-    """A start, stop or resume that the run's state does not allow; status is 409."""
+    """A start, stop or resume that the run's state does not allow (409), or a launch that failed (500)."""
 
     def __init__(self, message: str, status: int = 409):
         super().__init__(message)
@@ -93,12 +100,18 @@ class Runner:
     # --- launching ---
 
     def start(self, run_id: str) -> None:
-        """Launch the pipeline for a run. Raises RunnerError if it is already live."""
+        """
+        Launch the pipeline for a run that has never been launched. A run that
+        has been (its process.log exists) raises RunnerError: a fresh start
+        would hide its finished rows, so it must be resumed instead.
+        """
         with self._lock:
-            self.store.run_dir(run_id)  # KeyError for an unknown run
+            folder = self.store.run_dir(run_id)  # KeyError for an unknown run
             self._poll_locked()
             if run_id in self._procs:
                 raise RunnerError("This run is already running.")
+            if (folder / _LOG).exists():
+                raise RunnerError("This run has already been started. Resume it instead.")
             self._launch(run_id, resume=False)
 
     def resume(self, run_id: str) -> None:
@@ -122,7 +135,11 @@ class Runner:
             self._launch(run_id, resume=True)
 
     def _launch(self, run_id: str, resume: bool) -> None:
-        """Start the process and mark the run running. Caller holds the lock."""
+        """
+        Start the process and mark the run running. Caller holds the lock.
+        If the process cannot be started the run is marked failed and
+        RunnerError (500) is raised.
+        """
         folder = self.store.run_dir(run_id)
         meta = self.store.get_meta(run_id)
         args = self.command + [
@@ -138,15 +155,16 @@ class Runner:
         env["PYTHONIOENCODING"] = "utf-8"
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
 
-        log = open(folder / "process.log", "ab")
+        log = open(folder / _LOG, "ab")
         try:
             log_start = log.seek(0, os.SEEK_END)
             popen = subprocess.Popen(args, cwd=folder, env=env, stdin=subprocess.DEVNULL,
                                      stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
         except OSError as exc:
             log.close()
-            self.store.update_meta(run_id, status="failed", error=f"Could not start the pipeline: {exc}")
-            return
+            message = f"Could not start the pipeline: {exc}"
+            self.store.update_meta(run_id, status="failed", error=message)
+            raise RunnerError(message, status=500) from None
         except BaseException:
             log.close()
             raise
@@ -197,11 +215,21 @@ class Runner:
             self._poll_locked()
 
     def _poll_locked(self) -> None:
+        # One run's trouble must not stop the others being reaped or poll() raising.
         for run_id, tracked in list(self._procs.items()):
-            if tracked.popen.poll() is not None:
-                self._reap(run_id, tracked)
-            else:
-                self._note_model(run_id, tracked)
+            try:
+                if tracked.popen.poll() is not None:
+                    self._reap(run_id, tracked)
+                else:
+                    self._note_model(run_id, tracked)
+            except KeyError:
+                logger.warning("Run %s no longer exists; its pipeline process is no longer tracked.", run_id)
+                del self._procs[run_id]
+                self._kill(tracked)
+                tracked.log.close()
+            except OSError as exc:
+                # Still tracked: the next poll() tries to record it again.
+                logger.warning("Could not update run %s: %s", run_id, exc)
 
     def _note_model(self, run_id: str, tracked: _Tracked) -> None:
         """Copy the model id the pipeline recorded into meta.model, once."""
@@ -217,9 +245,10 @@ class Runner:
             tracked.model_known = True
 
     def _reap(self, run_id: str, tracked: _Tracked, status: Optional[str] = None) -> None:
-        """Forget an exited process, close its log and record how it ended. Caller holds the lock."""
-        del self._procs[run_id]
-        tracked.log.close()
+        """
+        Record how an exited process ended, then forget it and close its log.
+        Caller holds the lock. If recording fails the process stays tracked.
+        """
         self._note_model(run_id, tracked)
         code = tracked.popen.returncode
         if status is not None:
@@ -229,8 +258,10 @@ class Runner:
         elif tracked.stopping:
             self.store.update_meta(run_id, status="stopped")
         else:
-            message = _failure_message(self.store.run_dir(run_id) / "process.log", tracked.log_start, code)
+            message = _failure_message(self.store.run_dir(run_id) / _LOG, tracked.log_start, code)
             self.store.update_meta(run_id, status="failed", error=message)
+        del self._procs[run_id]
+        tracked.log.close()
 
     def reconcile(self) -> None:
         """At server start: a run whose meta says running but that has no process here was interrupted."""
@@ -243,10 +274,26 @@ class Runner:
         """Kill every tracked process and mark its run interrupted (stopped, if a stop was under way)."""
         with self._lock:
             self._poll_locked()  # runs that already ended keep their real outcome
-            for tracked in self._procs.values():  # every process dies even if a meta write fails below
-                self._kill(tracked)
+            # Every process dies before any meta is written, all against one deadline.
+            for tracked in self._procs.values():
+                tracked.popen.terminate()
+            deadline = time.monotonic() + _STOP_WAIT_S
+            for tracked in self._procs.values():
+                try:
+                    tracked.popen.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    pass
+            for tracked in self._procs.values():
+                if tracked.popen.poll() is None:
+                    tracked.popen.kill()
+                    tracked.popen.wait()
             for run_id, tracked in list(self._procs.items()):
-                self._reap(run_id, tracked, status="stopped" if tracked.stopping else "interrupted")
+                try:
+                    self._reap(run_id, tracked, status="stopped" if tracked.stopping else "interrupted")
+                except (KeyError, OSError) as exc:
+                    logger.warning("Could not record the end of run %s: %s", run_id, exc)
+                    del self._procs[run_id]
+                    tracked.log.close()
 
     @staticmethod
     def _kill(tracked: _Tracked) -> None:

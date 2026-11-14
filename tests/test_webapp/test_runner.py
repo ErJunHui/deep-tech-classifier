@@ -117,6 +117,125 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(steps, {i: "Validation" for i in range(8)})
         self.assertEqual(phase, "Classify companies")
 
+        # A launched run is never started afresh, by this runner or after a restart.
+        for runner in (self.runner, self._runner([sys.executable, FAKE])):
+            self._assert_start_refused(runner, run_id)
+            self.assertEqual(self.store.get_meta(run_id)["status"], "complete")
+            self.assertEqual(sorted(self.store.read_results(run_id)[0]), list(range(8)))
+
+    def _assert_start_refused(self, runner, run_id):
+        with self.assertRaises(RunnerError) as ctx:
+            runner.start(run_id)
+        self.assertEqual(ctx.exception.status, 409)
+        self.assertEqual(str(ctx.exception), "This run has already been started. Resume it instead.")
+        self.assertEqual(runner._procs, {})
+
+    def test_start_refuses_a_stopped_run_and_after_restart(self):
+        runner = self._runner(SLEEPER)
+        run_id = self._create(3)
+        runner.start(run_id)
+        runner.stop(run_id)
+        self._assert_start_refused(runner, run_id)
+        self.assertEqual(self.store.get_meta(run_id)["status"], "stopped")
+        # After a server restart: a fresh Runner over the same store.
+        restarted = self._runner(SLEEPER)
+        restarted.reconcile()
+        self._assert_start_refused(restarted, run_id)
+        self.assertEqual(self.store.get_meta(run_id)["status"], "stopped")
+        restarted.command = SUCCEEDS
+        restarted.resume(run_id)
+        self._wait_status(run_id, "complete", restarted)
+
+    def test_launch_failure_is_reported_and_the_run_stays_resumable(self):
+        run_id = self._create(3)
+        folder = self.store.run_dir(run_id)
+        missing = self._runner([str(self.tmp / "no_such_program.exe")])
+        with self.assertRaises(RunnerError) as ctx:
+            missing.start(run_id)
+        self.assertEqual(ctx.exception.status, 500)
+        self.assertTrue(str(ctx.exception).startswith("Could not start the pipeline: "), str(ctx.exception))
+        meta = self.store.get_meta(run_id)
+        self.assertEqual(meta["status"], "failed")
+        self.assertTrue(meta["error"])
+        self.assertEqual(missing._procs, {})
+        # No handle is left open on the run folder.
+        os.replace(folder, self.tmp / "moved")
+        os.replace(self.tmp / "moved", folder)
+
+        # resume fails the same way and the run stays failed.
+        with self.assertRaises(RunnerError) as ctx:
+            missing.resume(run_id)
+        self.assertEqual(ctx.exception.status, 500)
+        self.assertEqual(self.store.get_meta(run_id)["status"], "failed")
+
+        # A working command gets the run going.
+        working = self._runner(SUCCEEDS)
+        working.resume(run_id)
+        self._wait_status(run_id, "complete", working)
+
+    def _wait_exited(self, runner, run_ids):
+        deadline = time.monotonic() + DEADLINE_S
+        while any(runner._procs[r].popen.poll() is None for r in run_ids):
+            self.assertLess(time.monotonic(), deadline, "processes did not exit")
+            time.sleep(0.02)
+
+    def test_one_bad_run_does_not_break_poll(self):
+        runner = self._runner(SLEEPER)
+        gone = self._create(3)
+        runner.start(gone)
+        runner.command = SUCCEEDS
+        healthy, unwritable = self._create(3), self._create(3)
+        runner.start(healthy)
+        runner.start(unwritable)
+        self._wait_exited(runner, [healthy, unwritable])
+        gone_tracked = runner._procs[gone]
+
+        real_run_dir, real_update = self.store.run_dir, self.store.update_meta
+
+        def run_dir(run_id):
+            if run_id == gone:
+                raise KeyError(run_id)  # its folder was removed
+            return real_run_dir(run_id)
+
+        def update_meta(run_id, **fields):
+            if run_id == unwritable:
+                raise OSError(28, "No space left on device")
+            return real_update(run_id, **fields)
+
+        with mock.patch.object(self.store, "run_dir", side_effect=run_dir), \
+                mock.patch.object(self.store, "update_meta", side_effect=update_meta), \
+                self.assertLogs("webapp.runner", "WARNING") as logs:
+            runner.poll()  # does not raise
+        self.assertEqual(len(logs.records), 2)
+        self.assertTrue(any(gone in line for line in logs.output))
+        self.assertTrue(any(unwritable in line for line in logs.output))
+
+        self.assertEqual(self.store.get_meta(healthy)["status"], "complete")
+        self.assertNotIn(healthy, runner._procs)
+        # The removed run is dropped, its process killed and its log closed.
+        self.assertNotIn(gone, runner._procs)
+        self.assertIsNotNone(gone_tracked.popen.poll())
+        self.assertTrue(gone_tracked.log.closed)
+        # The run whose meta could not be written is still tracked, and recorded next time.
+        self.assertIn(unwritable, runner._procs)
+        self.assertEqual(self.store.get_meta(unwritable)["status"], "running")
+        runner.poll()
+        self.assertEqual(self.store.get_meta(unwritable)["status"], "complete")
+        self.assertEqual(runner._procs, {})
+
+    def test_shutdown_kills_all_runs(self):
+        runner = self._runner(SLEEPER)
+        run_ids = [self._create(3) for _ in range(3)]
+        for run_id in run_ids:
+            runner.start(run_id)
+        popens = [runner._procs[r].popen for r in run_ids]
+        started = time.monotonic()
+        runner.shutdown()
+        self.assertLess(time.monotonic() - started, 10)
+        self.assertTrue(all(p.poll() is not None for p in popens))
+        self.assertEqual([self.store.get_meta(r)["status"] for r in run_ids], ["interrupted"] * 3)
+        self.assertEqual(runner._procs, {})
+
     def test_stop_keeps_finished_rows_and_resume_finishes(self):
         os.environ["FAKE_DELAY_S"] = "0.3"
         run_id = self._create(5)
@@ -166,8 +285,9 @@ class RunnerTest(unittest.TestCase):
         log = self.store.run_dir(run_id) / "process.log"
         # An earlier attempt's fatal line, a large log and bytes that are not UTF-8.
         log.write_bytes(b"[FATAL] stale failure\n" + b"x" * 2_000_000 + b"\n\xff\xfe\x80 bad bytes\n")
+        self.store.update_meta(run_id, status="failed")
         runner = self._runner([sys.executable, "-c", "import sys; print('last words \\xe9'); print(); sys.exit(3)"])
-        runner.start(run_id)
+        runner.resume(run_id)
         self._wait_ended(run_id, runner)
         meta = self.store.get_meta(run_id)
         self.assertEqual(meta["status"], "failed")
@@ -179,13 +299,6 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.store.get_meta(run_id)["error"], "")
         self._wait_ended(run_id, silent)
         self.assertEqual(self.store.get_meta(run_id)["error"], "The pipeline exited with code 3.")
-
-        # A command that cannot be launched at all fails the run straight away.
-        missing = self._runner([str(self.tmp / "no_such_program.exe")])
-        missing.resume(run_id)
-        meta = self.store.get_meta(run_id)
-        self.assertEqual(meta["status"], "failed")
-        self.assertTrue(meta["error"].startswith("Could not start the pipeline:"), meta["error"])
 
     def test_resume_rejected_while_running_and_when_clean_complete(self):
         sleeper = self._runner(SLEEPER)
