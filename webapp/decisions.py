@@ -57,7 +57,12 @@ def _load(run_dir: Path) -> Dict[int, List[Dict[str, Any]]]:
         for key, history in data.items():
             if not isinstance(history, list) or not all(isinstance(e, dict) for e in history):
                 raise ValueError
-            out[int(key)] = history
+            # Only canonical keys ("0", "12"): "01" or "1_0" would land on
+            # the same index as another key and one history would be lost.
+            index = int(key)
+            if index < 0 or str(index) != key:
+                raise ValueError
+            out[index] = history
         return out
     except ValueError:
         raise DecisionError(f"{_FILE} in this run cannot be read; fix or remove it before deciding rows.") from None
@@ -111,7 +116,11 @@ def record(run_dir: Path, index: int, choice: str, note: str, row: Optional[Dict
     result = _decidable_result(row)
     if choice not in ("confirm", "change"):
         raise DecisionError(f"Unknown choice: {choice!r}.")
-    note = (note or "").strip()[:_MAX_NOTE]
+    if note is None:
+        note = ""
+    if not isinstance(note, str):
+        raise DecisionError("The note must be text.")
+    note = note.strip()[:_MAX_NOTE]
     verdict = result.get("verdict")
     if choice == "change":
         if verdict not in _OTHER_VERDICT:

@@ -2,6 +2,7 @@
 
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -128,15 +129,64 @@ class DecisionsTest(unittest.TestCase):
     def test_missing_file_loads_empty(self):
         self.assertEqual(decisions.load(self.run_dir), {})
 
-    def test_corrupt_file_is_not_overwritten(self):
+    def assertCorruptFileKept(self, content):
         path = self.run_dir / "decisions.json"
+        path.write_bytes(content.encode("utf-8"))
+        self.assertRejected(409, decisions.load, self.run_dir)
+        self.assertRejected(409, decisions.record, self.run_dir, 1, "confirm", "", _row(index=1), NOW)
+        self.assertRejected(409, decisions.restore, self.run_dir, 1, _row(index=1), NOW)
+        self.assertRejected(409, decisions.undo, self.run_dir, 1)
+        self.assertEqual(path.read_bytes(), content.encode("utf-8"))
+
+    def test_corrupt_file_is_not_overwritten(self):
         for content in ('{"0": [', '["not", "a", "dict"]', '{"zero": []}'):
             with self.subTest(content=content):
-                path.write_text(content, encoding="utf-8")
-                self.assertRejected(409, decisions.load, self.run_dir)
-                self.assertRejected(409, decisions.record, self.run_dir, 0, "confirm", "", _row(), NOW)
-                self.assertRejected(409, decisions.undo, self.run_dir, 0)
-                self.assertEqual(path.read_text(encoding="utf-8"), content)
+                self.assertCorruptFileKept(content)
+
+    def test_history_that_is_not_a_list_of_dicts_is_corrupt(self):
+        for content in ('{"0": "x"}', '{"0": ["x"]}'):
+            with self.subTest(content=content):
+                self.assertCorruptFileKept(content)
+
+    def test_non_canonical_keys_are_corrupt(self):
+        entry = '{"type": "confirm", "verdict": "deep tech", "note": "", "at": "2026-11-13T14:40:02"}'
+        for content in (f'{{"01": [{entry}], "1": [{entry}]}}', f'{{"1_0": [{entry}]}}', f'{{"-1": [{entry}]}}'):
+            with self.subTest(content=content):
+                self.assertCorruptFileKept(content)
+
+    def test_non_text_note_rejected(self):
+        for note in (5, ["x"]):
+            with self.subTest(note=note):
+                self.assertRejected(409, decisions.record, self.run_dir, 0, "confirm", note, _row(), NOW)
+        self.assertEqual(decisions.load(self.run_dir), {})
+        history = decisions.record(self.run_dir, 0, "confirm", None, _row(), NOW)
+        self.assertEqual(history[-1]["note"], "")
+
+    def test_change_on_unknown_verdict_rejected(self):
+        self.assertRejected(409, decisions.record, self.run_dir, 0, "change", "note", _row(verdict="unclear"), NOW)
+        self.assertEqual(decisions.load(self.run_dir), {})
+
+    def test_concurrent_writers_keep_every_decision(self):
+        n = 8
+        barrier = threading.Barrier(n)
+        errors = []
+
+        def decide(i):
+            try:
+                barrier.wait()
+                decisions.record(self.run_dir, i, "confirm", "", _row(index=i), NOW)
+            except Exception as exc:  # surfaced below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=decide, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(errors, [])
+        loaded = decisions.load(self.run_dir)
+        self.assertEqual(sorted(loaded), list(range(n)))
+        self.assertTrue(all(len(h) == 1 for h in loaded.values()))
 
 
 if __name__ == "__main__":
