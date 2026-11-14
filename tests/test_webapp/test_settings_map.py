@@ -60,6 +60,15 @@ class SettingsMapTest(unittest.TestCase):
             clean_settings({"provider": "nonesuch"})
         with self.assertRaises(ValueError):
             clean_settings({"tier": "turbo"})
+        # A browser can send any JSON value; each non-string is a ValueError, not a TypeError.
+        for bad in (["x"], {"a": 1}, 1, 1.5, True, None):
+            for key in ("provider", "tier"):
+                with self.subTest(key=key, value=bad):
+                    with self.assertRaises(ValueError):
+                        clean_settings({key: bad})
+        # A missing key is not malformed: it falls back to the default.
+        s = clean_settings({})
+        self.assertEqual((s["provider"], s["tier"]), (DEFAULT_SETTINGS["provider"], DEFAULT_SETTINGS["tier"]))
 
     def test_blank_model_becomes_none(self):
         cfg = to_pipeline_config(clean_settings({"model": "  "}), _template(), ROOT)

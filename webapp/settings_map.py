@@ -99,11 +99,13 @@ def clean_settings(raw: Dict[str, Any]) -> Dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     settings = copy.deepcopy(DEFAULT_SETTINGS)
 
+    # A non-string (list, dict, number, explicit None) is unknown too; checking
+    # the type first keeps an unhashable value from raising TypeError.
     provider = raw.get("provider", settings["provider"])
-    if provider not in _PROVIDERS:
+    if not isinstance(provider, str) or provider not in _PROVIDERS:
         raise ValueError(f"Unknown provider: {provider!r}")
     tier = raw.get("tier", settings["tier"])
-    if tier not in models.TIERS:
+    if not isinstance(tier, str) or tier not in models.TIERS:
         raise ValueError(f"Unknown tier: {tier!r}")
     settings["provider"] = provider
     settings["tier"] = tier
