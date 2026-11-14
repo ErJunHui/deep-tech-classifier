@@ -223,6 +223,65 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(self.store.get_meta(unwritable)["status"], "complete")
         self.assertEqual(runner._procs, {})
 
+    def test_any_error_in_one_run_is_contained_and_logged_once(self):
+        runner = self._runner(SUCCEEDS)
+        healthy, broken = self._create(3), self._create(3)
+        runner.start(healthy)
+        runner.start(broken)
+        self._wait_exited(runner, [healthy, broken])
+
+        real_update = self.store.update_meta
+        message = {"text": "bad value"}
+
+        def update_meta(run_id, **fields):
+            if run_id == broken:
+                raise ValueError(message["text"])
+            return real_update(run_id, **fields)
+
+        with mock.patch.object(self.store, "update_meta", side_effect=update_meta):
+            with self.assertLogs("webapp.runner", "WARNING") as logs:
+                for _ in range(3):
+                    runner.poll()  # does not raise
+            self.assertEqual(len(logs.records), 1)
+            self.assertIn(broken, logs.output[0])
+            self.assertIn("ValueError: bad value", logs.output[0])  # with the traceback
+
+            self.assertEqual(self.store.get_meta(healthy)["status"], "complete")
+            self.assertNotIn(healthy, runner._procs)
+            self.assertIn(broken, runner._procs)
+            self.assertEqual(self.store.get_meta(broken)["status"], "running")
+
+            message["text"] = "another bad value"
+            with self.assertLogs("webapp.runner", "WARNING") as logs:
+                runner.poll()
+                runner.poll()
+            self.assertEqual(len(logs.records), 1)
+            self.assertIn("another bad value", logs.output[0])
+
+        runner.poll()
+        self.assertEqual(self.store.get_meta(broken)["status"], "complete")
+        self.assertEqual(runner._procs, {})
+
+    def test_shutdown_survives_any_error_in_one_run(self):
+        runner = self._runner(SLEEPER)
+        broken, other = self._create(3), self._create(3)
+        runner.start(broken)
+        runner.start(other)
+        popens = [runner._procs[r].popen for r in (broken, other)]
+        real_update = self.store.update_meta
+
+        def update_meta(run_id, **fields):
+            if run_id == broken:
+                raise ValueError("bad value")
+            return real_update(run_id, **fields)
+
+        with mock.patch.object(self.store, "update_meta", side_effect=update_meta), \
+                self.assertLogs("webapp.runner", "WARNING"):
+            runner.shutdown()
+        self.assertTrue(all(p.poll() is not None for p in popens))
+        self.assertEqual(self.store.get_meta(other)["status"], "interrupted")
+        self.assertEqual(runner._procs, {})
+
     def test_shutdown_kills_all_runs(self):
         runner = self._runner(SLEEPER)
         run_ids = [self._create(3) for _ in range(3)]

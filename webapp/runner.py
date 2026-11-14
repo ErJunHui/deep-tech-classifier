@@ -20,7 +20,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import IO, Dict, List, Optional
+from typing import IO, Dict, List, Optional, Tuple
 
 from webapp.run_store import RunStore
 
@@ -96,6 +96,9 @@ class Runner:
         self.command = list(command) if command else [sys.executable, str(self.project_root / "classify.py")]
         self._lock = threading.Lock()
         self._procs: Dict[str, _Tracked] = {}
+        # The last contained failure per run, (type name, message), so a
+        # failure that repeats on every poll is logged once.
+        self._failures: Dict[str, Tuple[str, str]] = {}
 
     # --- launching ---
 
@@ -224,12 +227,18 @@ class Runner:
                     self._note_model(run_id, tracked)
             except KeyError:
                 logger.warning("Run %s no longer exists; its pipeline process is no longer tracked.", run_id)
+                self._failures.pop(run_id, None)
                 del self._procs[run_id]
                 self._kill(tracked)
                 tracked.log.close()
-            except OSError as exc:
+            except Exception as exc:
                 # Still tracked: the next poll() tries to record it again.
-                logger.warning("Could not update run %s: %s", run_id, exc)
+                failure = (type(exc).__name__, str(exc))
+                if self._failures.get(run_id) != failure:
+                    self._failures[run_id] = failure
+                    logger.exception("Could not update run %s", run_id)
+            else:
+                self._failures.pop(run_id, None)
 
     def _note_model(self, run_id: str, tracked: _Tracked) -> None:
         """Copy the model id the pipeline recorded into meta.model, once."""
@@ -290,10 +299,11 @@ class Runner:
             for run_id, tracked in list(self._procs.items()):
                 try:
                     self._reap(run_id, tracked, status="stopped" if tracked.stopping else "interrupted")
-                except (KeyError, OSError) as exc:
-                    logger.warning("Could not record the end of run %s: %s", run_id, exc)
+                except Exception:
+                    logger.exception("Could not record the end of run %s", run_id)
                     del self._procs[run_id]
                     tracked.log.close()
+            self._failures.clear()
 
     @staticmethod
     def _kill(tracked: _Tracked) -> None:
