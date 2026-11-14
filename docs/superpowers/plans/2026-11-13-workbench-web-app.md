@@ -501,6 +501,94 @@ def test_batch_false_for_non_anthropic(self)
 - [ ] **Step 4: Run** — expected: pass.
 - [ ] **Step 5: Commit** — "Add the pre-run cost and duration estimate".
 
+### Task 9c: Estimate follow-ups from the Task 9 review
+
+Task 9 (`cac1f80`) and Task 9b (`4d2527d`) are done. Their independent review left three issues open; this task closes them. Each part is its own commit and can be done or dropped on its own. Tests live in `tests/test_webapp/` (the Task 3 ruling), so every command here is `tests.test_webapp.…`.
+
+**Files:**
+- Modify: `webapp/estimate.py`, `pipeline/models.py`, `pipeline/llm_provider.py`, `pipeline/orchestrator.py`
+- Test: `tests/test_webapp/test_estimate.py`, `tests/test_models.py`, `tests/test_fixes.py`
+
+**Interfaces:**
+- Produces: `estimate_request(body: Any) -> dict` and `EstimateError(ValueError)` in `webapp/estimate.py`. It takes the raw JSON body of `POST /api/estimate`, runs `body["settings"]` through `clean_settings` and returns `estimate(settings, rows)`. It raises `EstimateError` with a readable message when the body is not an object, the provider or tier is unknown (the `ValueError` from `clean_settings`, re-raised), or `rows` is anything but a non-negative whole number (`bool`, `None`, a string, a negative, a non-finite float and a float with a fraction are all rejected; `12.0` is accepted as 12). Missing `settings` means defaults; missing `rows` is an error. Task 10 calls this and maps `EstimateError` → 400.
+- Changes the estimate dict: two keys are added, `"pricedAs": str | None` and `"pinned": bool`. `pinned` is true when the model came from the pin (by `models.pinned_model`). `pricedAs` is the model whose prices were used when that is not `model` itself, else `None`. Tasks 10, 12 and 14 pass these through.
+- Produces in `pipeline/models.py`: `ESTIMATE_PRICE_AS: Dict[str, str]` (moving alias → the priced version it points to today) and `search_model_for(provider: str, model: str) -> str` (the model that runs web-search calls: `OPENAI_SEARCH_CANDIDATES[0]` for `openai`, otherwise `model`).
+
+#### Part 1 — Reject bad estimate requests (review Minor 3)
+
+Today `estimate` raises `KeyError`, `TypeError`, `AttributeError`, `ValueError` or `OverflowError` on input that skipped `clean_settings` or on a bad `rows`; from an HTTP handler each is a 500. `estimate` itself keeps its contract (settings from `clean_settings`, `rows` an int); the new `estimate_request` is the only entry point the API uses.
+
+- [ ] **Step 1: Write the failing tests** in `tests/test_webapp/test_estimate.py`
+
+```python
+def test_request_with_defaults_and_rows(self)          # {"rows": 20} -> same dict as estimate(clean_settings({}), 20)
+def test_request_cleans_settings(self)                 # {"settings": {"validatorThreshold": 999}, "rows": 5} -> threshold clamped, no error
+def test_request_rejects_bad_rows(self)                # None, "5", "abc", True, -1, 2.7, float("inf"), float("nan"), missing -> EstimateError
+def test_request_accepts_whole_float_rows(self)        # 12.0 -> 12
+def test_request_rejects_unknown_provider_and_tier(self)  # EstimateError carrying clean_settings' message
+def test_request_rejects_non_object_body(self)         # None, [], "x" -> EstimateError
+```
+
+- [ ] **Step 2: Run** `python -m unittest tests.test_webapp.test_estimate -v` — expected: the six new tests fail.
+- [ ] **Step 3: Implement** `EstimateError` and `estimate_request`.
+- [ ] **Step 4: Run** — expected: pass.
+- [ ] **Step 5: Commit** — "Validate estimate requests before estimating".
+
+#### Part 2 — Estimate for a tier that is a moving alias (review P1)
+
+Every Gemini tier in `CANDIDATES` is a `-latest` alias with no price, so every Gemini estimate is "unknown", and the prototype's fallback text (`Pinned model is not priced in pipeline/models.py…`, `workbench.js:2224`) is wrong when nothing is pinned. The run itself is priced afterwards by the version the API reports (`orchestrator._rates_for`).
+
+Decision made here (see Open decision 7): the estimate, and only the estimate, prices an alias by the version it points to today, and says so. The pipeline's rule that a run never borrows another model's rates is unchanged: `get_cost_rates` is not touched.
+
+- `ESTIMATE_PRICE_AS` maps each alias in `CANDIDATES` that has no profile to a model that is in `COST_RATES`. Fill it from the provider's model page at implementation time. If the current target has no profile yet, add one with prices read from the provider's pricing page; if a price cannot be confirmed, leave that alias out and it stays unknown. Never copy a neighbouring model's price.
+- In `estimate`: when `model` is unpriced and `ESTIMATE_PRICE_AS` has it, use the mapped model's rates, set `known` true and `pricedAs` to the mapped model. A pinned model is never mapped (`pricedAs` stays `None` for it even if its name is an alias key; a pin is a statement about an exact model).
+- The comment on `ESTIMATE_PRICE_AS` says it is for estimates only and must be re-checked whenever `CANDIDATES` changes.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_models.py
+def test_estimate_price_as_keys_are_unpriced_candidates_and_values_are_priced(self)
+    # every key is in some CANDIDATES list and has no profile; every value is in COST_RATES
+# tests/test_webapp/test_estimate.py
+def test_alias_tier_is_priced_as_its_current_version(self)   # for each (provider, tier) whose first candidate is in ESTIMATE_PRICE_AS:
+                                                             # known True, model is the alias, pricedAs the mapped model, classify part uses the mapped rates
+def test_priced_model_has_no_priced_as(self)                 # anthropic fast -> pricedAs None, pinned False
+def test_pinned_alias_is_not_mapped(self)                    # model pinned to an alias key -> known False, pricedAs None, pinned True
+def test_pinned_flag(self)                                   # "my-finetune" -> pinned True; "null" -> pinned False
+def test_get_cost_rates_still_does_not_price_an_alias(self)  # get_cost_rates(alias, warn=False) is unknown
+```
+
+- [ ] **Step 2: Run** both test modules — expected: fail.
+- [ ] **Step 3: Implement.** Update `test_result_shape_and_tier_model` for the two new keys.
+- [ ] **Step 4: Run** `python -m unittest discover -s tests` — expected: pass.
+- [ ] **Step 5: Commit** — "Estimate a moving-alias tier by the version it points to".
+
+#### Part 3 — Price OpenAI web-search calls by the model that runs them (review P3)
+
+On OpenAI, enrichment and validation run on the dedicated search model (`OPENAI_SEARCH_CANDIDATES`, `llm_provider.py:650-670`), but `orchestrator.py:664-683` prices their tokens at the main model's rates and the search model has no `web_search` fee listed. With the fast tier the search tokens are priced at the small model's rate, far below what is billed. Both the run's reported cost and the estimate are low. This part changes the cost the pipeline reports for OpenAI runs (CLI included); nothing changes for Anthropic or Gemini (see Open decision 8).
+
+- [ ] **Step 1: Read first.** Confirm from `agents/enrichment_agent.py`, `agents/validator_agent.py` and the OpenAI provider which calls go to the search model and what `searches` count the provider returns for them. Read the search model's current token prices and per-call search fee from OpenAI's pricing page. Record what you found in the commit message. If the validator makes some calls on the main model, price only the search-model tokens at the search rates and say how they are told apart; if they cannot be told apart from the recorded token columns, stop and report rather than guess.
+- [ ] **Step 2: Write the failing tests**
+
+```python
+# tests/test_models.py
+def test_search_model_for(self)            # openai -> OPENAI_SEARCH_CANDIDATES[0]; anthropic and gemini -> the model passed in
+def test_openai_search_model_has_a_search_fee(self)   # COST_RATES[search model] has "web_search" > 0
+# tests/test_fixes.py — cost of one company on a fake OpenAI provider with known token counts
+def test_openai_search_tokens_are_priced_at_the_search_model(self)
+    # classifier tokens at the main model's rates; enrichment and validator tokens at the search model's; searches x the search model's fee
+def test_anthropic_cost_is_unchanged(self)   # same inputs, anthropic model -> the same total as before this task (pin the number)
+def test_unpriced_main_model_is_still_unknown(self)   # total_cost_usd None even when the search model is priced
+# tests/test_webapp/test_estimate.py
+def test_openai_search_parts_use_the_search_model(self)   # openai fast: enrich and validate parts computed from search_model_for's rates and fee; classify from the tier model
+```
+
+- [ ] **Step 3: Run** — expected: fail.
+- [ ] **Step 4: Implement.** In `orchestrator`, a `_search_rates_for(provider)` beside `_rates_for`, used for the enrichment and validator terms; the provider exposes its search model by a public attribute rather than `_search_model`. A run whose main model is unpriced stays `None`. In `estimate`, `_search_step_cost` takes the rates of `models.search_model_for(provider, model)`; `known` still follows the classifier model. One rule, in `pipeline/models.py`, for which model runs a search call.
+- [ ] **Step 5: Run** `python -m unittest discover -s tests` — expected: pass.
+- [ ] **Step 6: Commit** — "Price OpenAI web-search calls by the search model".
+
 ### Task 10: HTTP API and entry point
 
 **Files:**
@@ -515,7 +603,7 @@ def test_batch_false_for_non_anthropic(self)
 |---|---|
 | `GET /api/setup` | → `setup_info(os.environ)` |
 | `POST /api/files` | multipart `file` → inspect dict; `UploadError` → 400 `{"detail": message}` |
-| `POST /api/estimate` | `{"settings", "rows"}` → estimate dict |
+| `POST /api/estimate` | `{"settings", "rows"}` → estimate dict, by `estimate_request(body)` (Task 9c); `EstimateError` → 400 `{"detail": message}` |
 | `GET /api/runs` | → `[RunSummary]`, newest first |
 | `POST /api/runs` | `{"fileId", "settings", "exclude": [int]}` → 201 RunSummary. `exclude` lists 0-based data-row indexes the reviewer unticked in the setup table (optional, default `[]`); `RunStore.create` writes `input/<file>` without those rows (same format, same headers), so the pipeline, resume and `total` see only the ticked companies. 400 when the company-name mapping is missing or not a header of the file, the provider's key is not set (`<KEYVAR> is not set in .env`), an index is out of range, or every row is excluded (`Tick at least one company to start`) |
 | `GET /api/runs/{id}` | → `{"run": RunSummary, "rows": [Row], "cursor": int}` |
@@ -687,7 +775,7 @@ The design was chosen in a prototype round on 2026-11-13 ("In the table"; see `d
   - **Action bar**, right-aligned under the table: `Classify <n> companies · ~US$<cost> · about <m> min` and the batch note. When `startProblem` returns text the button keeps its place, shows the reason, and clicking it focuses the fix (column chip, header checkbox, or the provider in the analyst sheet). `Cancel` (and `Esc` when no menu is open) returns to the previously open run.
   - **Settings popover** (`Settings: <level> ▾`): three quality levels in plain words, mapped to tiers, with the model id as secondary text from `S.setup`; the four steps as switches with one plain sentence each; an `Analyst settings` link.
   - **Analyst sheet**: provider with key status and `Ask your admin to add <KEYVAR> to .env`, tier, pinned model with the `S.setup.pricedModels` hint, batch, the six thresholds with reset, and the estimate. It traps focus and closes on `Esc`, returning focus to the link.
-  - Estimate from `postEstimate(draft, ticked rows or 20)`, debounced 250 ms after any change; while a request is in flight the previous numbers stay; the note says `rough estimate`.
+  - Estimate from `postEstimate(draft, ticked rows or 20)`, debounced 250 ms after any change; while a request is in flight the previous numbers stay; the note says `rough estimate`. From Task 9c: when `pricedAs` is set the note adds `priced as <pricedAs>; the run is priced by the version the API reports`. When `known` is false the cost reads `unknown`, the split bar is hidden, and the line under it is `Pinned model is not priced in pipeline/models.py; token totals will be reported instead.` when `pinned` is true, otherwise `<model> has no listed price; the cost is shown after the run if the API reports a priced version.`
   - Start: `createRun(file.fileId, settings, [...excluded])`, adds the id to `sessionRunIds`, clears `S.draft`, opens the run (the same table now shows live rows) and focuses Stop. A 400 is shown in the action bar.
   - Events: `new-run`, `rerun`, `cancel-setup`, `clear-file`, `col-menu`, `map`, `tick-row`, `tick-all`, `settings-pop`, `analyst-open`, `analyst-close`, `reset-th`, `start`, provider/tier/toggle/number/model inputs, drag-over/leave/drop, key `O`.
 
@@ -736,3 +824,5 @@ These are choices this plan makes that you may want to overrule before work star
 4. **No build step and no framework on the frontend.** The prototype is plain JS and ports directly. The cost is hand-written DOM rendering staying as string templates. Of the libraries considered (Emil Kowalski's curated list), only NumberFlow is used, because it works as a web component without a framework. base-ui (popovers, menus, sheets), cmdk (command menu), Sonner (toasts) and Virtuoso (long tables) are React-only; adopting them means moving Tasks 11–15 to React with Vite. The long-table window in Task 12 stands in for Virtuoso.
 5. **Estimate constants are assumptions** until Task 16 calibrates them against a real run.
 6. **CLI runs are not shown in the app**, and the prototype's "results are in the workbook" archive view is dropped with them.
+7. **A moving-alias tier is estimated at today's version's price** (Task 9c, Part 2), shown as `priced as <model>`. The table can go stale when the provider repoints the alias. The alternative is no estimate for those tiers, only a line saying the cost is shown after the run; that needs just the `pinned` key and the wording in Task 14.
+8. **OpenAI runs will report a higher cost than before** (Task 9c, Part 3), because web-search calls are priced by the search model and its per-search fee. This changes a number the CLI prints and writes to the workbook, which the first Global Constraint otherwise forbids; it is a correction, not a behaviour change. The alternative is to leave the pipeline alone and note in the UI that OpenAI search costs are not included.
