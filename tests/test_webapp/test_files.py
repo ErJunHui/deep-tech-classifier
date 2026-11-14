@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from openpyxl import Workbook
 
@@ -165,6 +166,37 @@ class FilesTest(unittest.TestCase):
                 info = save_upload(self.uploads, filename, data)
                 self.assertEqual(info["name"], expected)
                 self._assert_contained(info)
+
+    def test_device_names_never_reach_a_device(self):
+        data = b"company,uen\nA,1\n"
+        names = ["CONIN$.csv", "conout$.csv", "CONOUT$ .csv", "COM\u00b9.csv", "com\u00b2.csv",
+                 "COM\u00b3.x.csv", "LPT\u00b9.csv", "lpt\u00b2.csv", "LPT\u00b3.csv", "COM0.csv", "LPT0.csv"]
+        for filename in names:
+            with self.subTest(filename=filename):
+                info = save_upload(self.uploads, filename, data)
+                # Replaced before any open: the bytes are in uploads/, not sent to a device.
+                self.assertEqual(info["name"], "input.csv")
+                self._assert_contained(info)
+                self.assertEqual(self._saved_path(info).read_bytes(), data)
+
+    def test_write_failure_is_an_upload_error(self):
+        for exc in (OSError("C:\\secret\\uploads\\x"), ValueError("Cannot open console")):
+            with self.subTest(exc=exc):
+                with mock.patch.object(Path, "write_bytes", side_effect=exc):
+                    message = self.assert_rejected("a.csv", b"company\nA\n", "could not be used")
+                self.assertNotIn("secret", message)
+                self.assertNotIn("console", message)
+
+    def test_long_non_bmp_name_is_saved(self):
+        data = b"company,uen\nA,1\n"
+        info = save_upload(self.uploads, "\U0001F600" * 200 + ".csv", data)
+        self.assertTrue(info["name"].startswith("\U0001F600"))
+        self.assertTrue(info["name"].endswith(".csv"))
+        # Measured in UTF-16 units, as Windows counts them; no surrogate pair is split.
+        self.assertLessEqual(len(info["name"].encode("utf-16-le")) // 2, 105)
+        self.assertEqual(set(info["name"][:-4]), {"\U0001F600"})
+        self._assert_contained(info)
+        self.assertEqual(self._saved_path(info).read_bytes(), data)
 
     def test_long_name_is_shortened(self):
         info = save_upload(self.uploads, "a" * 300 + ".xlsx", _xlsx(SAMPLE))

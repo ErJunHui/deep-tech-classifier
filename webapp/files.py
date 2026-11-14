@@ -23,7 +23,7 @@ MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 ALLOWED_EXTENSIONS = (".xlsx", ".xls", ".csv")
 PREVIEW_ROWS = 4
 MAX_CELL_CHARS = 300
-_MAX_STEM_CHARS = 100
+_MAX_STEM_UNITS = 100  # UTF-16 code units, as Windows counts path length
 
 # Mapping key -> header candidates, in priority order (matched case-insensitively).
 _HEADER_CANDIDATES: Dict[str, List[str]] = {
@@ -36,7 +36,10 @@ _HEADER_CANDIDATES: Dict[str, List[str]] = {
 # Control characters and the characters Windows forbids in file names.
 _UNSAFE_CHARS = re.compile(r'[\x00-\x1f\x7f<>:"/\\|?*]')
 _FILE_ID = re.compile(r"[0-9a-f]{32}")
-_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+# Windows device names, matched against the part of the name before the first dot.
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{p}{d}" for p in ("COM", "LPT") for d in "0123456789¹²³"
+}
 
 _ALLOWED_TEXT = ", ".join(ALLOWED_EXTENSIONS)
 
@@ -65,6 +68,16 @@ def detect_mapping(headers: List[str]) -> Dict[str, str]:
     return mapping
 
 
+def _cut_utf16(text: str, limit: int) -> str:
+    """text cut to at most limit UTF-16 code units, never splitting a character."""
+    units = 0
+    for i, ch in enumerate(text):
+        units += 2 if ord(ch) > 0xFFFF else 1
+        if units > limit:
+            return text[:i]
+    return text
+
+
 def _safe_name(filename: str) -> str:
     """
     The name to store an upload under.
@@ -85,7 +98,7 @@ def _safe_name(filename: str) -> str:
         raise UploadError(f"The file has no name. Please choose a {_ALLOWED_TEXT} file.")
     if ext not in ALLOWED_EXTENSIONS:
         raise UploadError(f"Only {_ALLOWED_TEXT} files can be used. Please choose a spreadsheet in one of these formats.")
-    stem = stem.strip(". ")[:_MAX_STEM_CHARS].rstrip(". ")
+    stem = _cut_utf16(stem.strip(". "), _MAX_STEM_UNITS).rstrip(". ")
     if not stem or stem.split(".")[0].strip().upper() in _RESERVED_NAMES:
         return "input" + ext
     return stem + base[len(base) - len(ext):]
@@ -119,7 +132,10 @@ def save_upload(uploads_dir: Path, filename: str, data: bytes) -> Dict[str, Any]
         path = folder / name
         if path.resolve().parent != folder.resolve():
             raise UploadError("The file name could not be used. Please rename the file and try again.")
-        path.write_bytes(data)
+        try:
+            path.write_bytes(data)
+        except (OSError, ValueError):
+            raise UploadError("The file name could not be used. Please rename the file and try again.") from None
         return inspect(path)
     except BaseException:
         shutil.rmtree(folder, ignore_errors=True)
