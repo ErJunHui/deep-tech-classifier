@@ -27,7 +27,7 @@ _PROVIDERS: Dict[str, Tuple[str, str]] = {
 }
 
 # Only Anthropic runs through the Message Batches API.
-_BATCH_PROVIDERS = {"anthropic"}
+BATCH_PROVIDERS = {"anthropic"}
 
 # Numeric setting -> (low, high), inclusive.
 _BOUNDS: Dict[str, Tuple[int, int]] = {
@@ -191,7 +191,7 @@ def setup_info(env: Mapping[str, str]) -> Dict[str, Any]:
             "label": label,
             "keyVar": key_var,
             "keySet": bool(env.get(key_var)),
-            "batch": pid in _BATCH_PROVIDERS,
+            "batch": pid in BATCH_PROVIDERS,
             "tiers": {tier: models.CANDIDATES[pid][tier][0] for tier in models.TIERS},
         }
         for pid, (label, key_var) in _PROVIDERS.items()

@@ -12,6 +12,7 @@ from typing import Any, Dict, Tuple
 
 from pipeline import models
 from pipeline.llm_provider import BATCH_DISCOUNT, cost_known, get_cost_rates
+from webapp.settings_map import BATCH_PROVIDERS
 
 # Assumptions, to be recalibrated from a real run's Full Detail token columns.
 CLASSIFIER_TOKENS = (3000, 600)        # input, output per company
@@ -24,9 +25,6 @@ SECONDS_PER_COMPANY = {"sequential": 18, "batch": 6}
 _NO_ENRICHMENT_TIME = 0.75
 _NO_VALIDATION_TIME = 0.85
 
-# Only Anthropic runs through the Message Batches API.
-_BATCH_PROVIDERS = {"anthropic"}
-
 
 def _token_cost(tokens: Tuple[int, int], rates: Dict[str, Any]) -> float:
     tokens_in, tokens_out = tokens
@@ -34,7 +32,13 @@ def _token_cost(tokens: Tuple[int, int], rates: Dict[str, Any]) -> float:
 
 
 def _search_step_cost(tokens_per_search: Tuple[int, int], searches: int, rates: Dict[str, Any]) -> float:
-    """USD per company for a step that makes `searches` web searches."""
+    """
+    USD per company for a step allowed `searches` web searches.
+
+    A step allowed no searches is costed as one: it still makes its call, and
+    the Anthropic provider allows at least one search.
+    """
+    searches = max(searches, 1)
     return searches * (_token_cost(tokens_per_search, rates) + rates.get("web_search", 0.0))
 
 
@@ -48,7 +52,8 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
 
     Returns:
         known: False when the model has no listed price; cost is then None.
-        model: The pinned model, or the tier's first candidate.
+        model: The pinned model (by the pipeline's rule, models.pinned_model),
+            or the tier's first candidate.
         batch: True when the run would use a batch job.
         cost: Sum of parts, or None when not known.
         secs: Estimated duration.
@@ -56,10 +61,13 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
     """
     rows = max(int(rows), 0)
     provider = settings["provider"]
-    model = settings["model"].strip() or models.CANDIDATES[provider][settings["tier"]][0]
-    rates = get_cost_rates(model)
+    pinned = models.pinned_model({"llm": {"model": settings["model"]}})
+    model = pinned or models.CANDIDATES[provider][settings["tier"]][0]
+    # warn=False: this runs on every settings change, including each keystroke
+    # of a half-typed pinned model.
+    rates = get_cost_rates(model, warn=False)
     known = cost_known(rates)
-    batch = bool(settings["batch"]) and provider in _BATCH_PROVIDERS
+    batch = bool(settings["batch"]) and provider in BATCH_PROVIDERS
 
     classify = rows * _token_cost(CLASSIFIER_TOKENS, rates)
     if batch:

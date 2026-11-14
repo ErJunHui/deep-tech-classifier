@@ -8,10 +8,11 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pipeline import models  # noqa: E402
+from pipeline import llm_provider  # noqa: E402
 from pipeline.llm_provider import get_cost_rates  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
-from webapp.settings_map import clean_settings  # noqa: E402
+from webapp.settings_map import clean_settings, setup_info  # noqa: E402
 
 
 def _settings(**overrides) -> dict:
@@ -118,6 +119,45 @@ class EstimateTest(unittest.TestCase):
             e = estimate(_settings(provider=provider, batch=True), 100)
             self.assertFalse(e["batch"], provider)
             self.assertEqual(e["secs"], 100 * est.SECONDS_PER_COMPANY["sequential"])
+
+    def test_validate_part_counts_share_tokens_and_search_fees(self):
+        e = estimate(_settings(validatorThreshold=70, maxWebSearches=3, enrichmentMaxSearches=1), 100)
+        rates = get_cost_rates(e["model"])
+        tokens_in, tokens_out = est.VALIDATOR_TOKENS_PER_SEARCH
+        expected = 100 * est.VALIDATED_SHARE_AT_70 * 3 * (
+            tokens_in * rates["input"] + tokens_out * rates["output"] + rates["web_search"]
+        )
+        self.assertGreater(rates["web_search"], 0)
+        self.assertAlmostEqual(e["parts"]["validate"], expected)
+
+    def test_step_with_zero_searches_is_costed_as_one(self):
+        # The step still makes its call, and the provider allows at least one search.
+        zero = estimate(_settings(enrichmentMaxSearches=0, maxWebSearches=0), 100)
+        one = estimate(_settings(enrichmentMaxSearches=1, maxWebSearches=1), 100)
+        self.assertGreater(zero["parts"]["enrich"], 0)
+        self.assertGreater(zero["parts"]["validate"], 0)
+        self.assertAlmostEqual(zero["parts"]["enrich"], one["parts"]["enrich"])
+        self.assertAlmostEqual(zero["parts"]["validate"], one["parts"]["validate"])
+
+    def test_pin_of_null_or_none_means_the_tier_model(self):
+        tier_model = models.CANDIDATES["anthropic"]["fast"][0]
+        for pin in ("null", "None", " NULL "):
+            e = estimate(_settings(model=pin), 100)
+            self.assertEqual(e["model"], tier_model, pin)
+            self.assertTrue(e["known"], pin)
+            self.assertIsNotNone(e["cost"], pin)
+
+    def test_unpriced_model_logs_no_warning(self):
+        name = "typed-so-far-9b"
+        with self.assertNoLogs(level="WARNING"):
+            e = estimate(_settings(model=name), 100)
+        self.assertFalse(e["known"])
+        self.assertNotIn(name, llm_provider._warned_unpriced)
+
+    def test_batch_agrees_with_setup_info_for_every_provider(self):
+        for p in setup_info({})["providers"]:
+            e = estimate(_settings(provider=p["id"], batch=True), 10)
+            self.assertEqual(e["batch"], p["batch"], p["id"])
 
     def test_negative_rows_count_as_zero(self):
         e = estimate(_settings(), -5)
