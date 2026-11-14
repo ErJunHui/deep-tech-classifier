@@ -69,13 +69,16 @@ class EpoBridgeTests(unittest.TestCase):
                 self.assertEqual(epo_bridge._resolve_package_dir("./lib/epo_patent"), expected)
             finally:
                 os.chdir(cwd)
-        self.assertEqual(epo_bridge._resolve_package_dir("/abs/epo"), "/abs/epo")
+        # An absolute path in this platform's form ("/abs/epo" on POSIX, "C:\abs\epo" on Windows).
+        absolute = os.path.abspath(os.path.join(os.sep, "abs", "epo"))
+        self.assertEqual(epo_bridge._resolve_package_dir(absolute), absolute)
 
     def test_missing_package_dir_is_reported(self):
+        missing = os.path.abspath(os.path.join(os.sep, "no", "such", "dir"))
         with self.assertLogs(epo_bridge.logger, level="ERROR") as logs:
-            result = epo_bridge.run_epo_lookup("Acme", "k", "s", "/no/such/dir")
+            result = epo_bridge.run_epo_lookup("Acme", "k", "s", missing)
         self.assertEqual(result.raw_status, "EPO Import Error")
-        self.assertIn("/no/such/dir", logs.output[0])
+        self.assertIn(missing, logs.output[0])
 
 
 class CostTests(unittest.TestCase):
