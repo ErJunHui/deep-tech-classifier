@@ -55,6 +55,11 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         known: False when the model has no listed price; cost is then None.
         model: The pinned model (by the pipeline's rule, models.pinned_model),
             or the tier's first candidate.
+        pricedAs: The model whose prices were used when that is not `model`
+            (a tier's moving alias priced as the version it points to today,
+            models.ESTIMATE_PRICE_AS), else None. A pinned model is never
+            mapped: a pin names an exact model.
+        pinned: True when `model` came from the pin.
         batch: True when the run would use a batch job.
         cost: Sum of parts, or None when not known.
         secs: Estimated duration.
@@ -67,6 +72,10 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
     # warn=False: this runs on every settings change, including each keystroke
     # of a half-typed pinned model.
     rates = get_cost_rates(model, warn=False)
+    priced_as = None
+    if not pinned and not cost_known(rates) and model in models.ESTIMATE_PRICE_AS:
+        priced_as = models.ESTIMATE_PRICE_AS[model]
+        rates = get_cost_rates(priced_as, warn=False)
     known = cost_known(rates)
     batch = bool(settings["batch"]) and provider in BATCH_PROVIDERS
 
@@ -97,6 +106,8 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
     return {
         "known": known,
         "model": model,
+        "pricedAs": priced_as,
+        "pinned": pinned is not None,
         "batch": batch,
         "cost": sum(parts.values()) if known else None,
         "secs": secs,

@@ -3,6 +3,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -35,7 +36,9 @@ class EstimateTest(unittest.TestCase):
 
     def test_result_shape_and_tier_model(self):
         e = estimate(_settings(tier="balanced"), 10)
-        self.assertEqual(set(e), {"known", "model", "batch", "cost", "secs", "parts"})
+        self.assertEqual(
+            set(e), {"known", "model", "pricedAs", "pinned", "batch", "cost", "secs", "parts"}
+        )
         self.assertEqual(e["model"], models.CANDIDATES["anthropic"]["balanced"][0])
         self.assertAlmostEqual(e["cost"], sum(e["parts"].values()))
         self.assertEqual(e["secs"], 10 * est.SECONDS_PER_COMPANY["sequential"])
@@ -163,6 +166,80 @@ class EstimateTest(unittest.TestCase):
         e = estimate(_settings(), -5)
         self.assertEqual(e["cost"], 0)
         self.assertEqual(e["secs"], 0)
+
+
+def _gemini_alias() -> str:
+    """A Gemini tier's moving alias, which has no listed price."""
+    return models.CANDIDATES["gemini"]["fast"][0]
+
+
+# Any model with a listed price will do as the alias's target in a patched table.
+_A_PRICED_MODEL = sorted(models.COST_RATES)[0]
+
+
+class PricedAsTest(unittest.TestCase):
+    def _check_alias_tiers(self):
+        checked = 0
+        for provider, tiers in models.CANDIDATES.items():
+            for tier, candidates in tiers.items():
+                alias = candidates[0]
+                if alias not in models.ESTIMATE_PRICE_AS:
+                    continue
+                with self.subTest(provider=provider, tier=tier):
+                    mapped = models.ESTIMATE_PRICE_AS[alias]
+                    e = estimate(_settings(provider=provider, tier=tier), 100)
+                    self.assertTrue(e["known"])
+                    self.assertEqual(e["model"], alias)
+                    self.assertEqual(e["pricedAs"], mapped)
+                    self.assertFalse(e["pinned"])
+                    self.assertIsNotNone(e["cost"])
+                    rates = get_cost_rates(mapped)
+                    tokens_in, tokens_out = est.CLASSIFIER_TOKENS
+                    expected = 100 * (tokens_in * rates["input"] + tokens_out * rates["output"])
+                    self.assertGreater(expected, 0)
+                    self.assertAlmostEqual(e["parts"]["classify"], expected)
+                checked += 1
+        return checked
+
+    def test_alias_tier_is_priced_as_its_current_version(self):
+        # The real table (it may be empty when no alias target could be confirmed).
+        self._check_alias_tiers()
+        # And a patched entry, so this test always checks something.
+        with patch.dict(models.ESTIMATE_PRICE_AS, {_gemini_alias(): _A_PRICED_MODEL}):
+            self.assertGreaterEqual(self._check_alias_tiers(), 1)
+
+    def test_unmapped_alias_tier_is_unknown(self):
+        with patch.dict(models.ESTIMATE_PRICE_AS, clear=True):
+            e = estimate(_settings(provider="gemini", tier="fast"), 100)
+        self.assertFalse(e["known"])
+        self.assertIsNone(e["cost"])
+        self.assertIsNone(e["pricedAs"])
+
+    def test_priced_model_has_no_priced_as(self):
+        e = estimate(_settings(provider="anthropic", tier="fast"), 100)
+        self.assertTrue(e["known"])
+        self.assertIsNone(e["pricedAs"])
+        self.assertFalse(e["pinned"])
+
+    def test_pinned_alias_is_not_mapped(self):
+        alias = _gemini_alias()
+        with patch.dict(models.ESTIMATE_PRICE_AS, {alias: _A_PRICED_MODEL}):
+            e = estimate(_settings(provider="gemini", model=alias), 100)
+        self.assertEqual(e["model"], alias)
+        self.assertFalse(e["known"])
+        self.assertIsNone(e["cost"])
+        self.assertIsNone(e["pricedAs"])
+        self.assertTrue(e["pinned"])
+
+    def test_pinned_flag(self):
+        self.assertTrue(estimate(_settings(model="my-finetune"), 10)["pinned"])
+        self.assertFalse(estimate(_settings(model="null"), 10)["pinned"])
+
+    def test_get_cost_rates_still_does_not_price_an_alias(self):
+        aliases = {_gemini_alias(), *models.ESTIMATE_PRICE_AS}
+        for alias in aliases:
+            with self.subTest(alias=alias):
+                self.assertFalse(llm_provider.cost_known(get_cost_rates(alias, warn=False)))
 
 
 class EstimateRequestTest(unittest.TestCase):
