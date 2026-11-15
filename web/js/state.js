@@ -1,8 +1,10 @@
-/* The workbench's state, the open run, polling, and the render pass over
-   all regions. Ported from the prototype's state (S), openRun, refreshView,
-   stopRun/resumeRun and onTick, with the simulation replaced by the API. */
+/* The open run, polling, and the render pass over all regions. Ported from
+   the prototype's openRun, refreshView, stopRun/resumeRun and onTick, with
+   the simulation replaced by the API. The state object S lives in store.js
+   and is re-exported here. */
 import * as api from './api.js';
 import { currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW } from './model.js';
+import { S, resumable } from './store.js';
 import { R } from './render/util.js';
 import { renderRail, renderRailFoot } from './render/rail.js';
 import { renderHead } from './render/head.js';
@@ -14,33 +16,7 @@ import { toast } from './render/toast.js';
 const POLL_MS = 1000;
 const LIST_MS = 5000;
 
-export const S = {
-  setup: null, // GET /api/setup
-  runs: [], // RunSummary[], newest first
-  active: null, // the open run: {run, rows, cursor} from GET /api/runs/{id}, kept current by polling
-  selected: null, // the selected row's index
-  sortKey: 'priority', sortDir: 1,
-  f: newFilters(),
-  viewIds: [], // the visible row indexes, filtered and sorted (model.computeIds)
-  snap: null, // {runId, dec: {index: decision}}: decisions at the last explicit view change
-  limit: ROW_WINDOW, // rows the table renders (model.visibleRows)
-  viewKey: '', // model.viewKey of the view the limit belongs to
-  draft: null, // the new run being set up
-  analyst: false, // the analyst-settings sheet is open
-  modal: null,
-  forms: {},
-  collapsed: { facts: true },
-  reading: false, detailW: null, filtersOpen: false,
-  sessionRunIds: new Set(), // runs created in this browser session
-  landed: {}, // {index: Date.now()} when a row's result arrived, for the wb-land animation
-};
-
-/* Stopped, interrupted and failed runs resume; so does a complete run with
-   error rows (they are retried). */
-export function resumable(run) {
-  if (run.status === 'stopped' || run.status === 'interrupted' || run.status === 'failed') return true;
-  return run.status === 'complete' && !!(run.counts && run.counts.errors);
-}
+export { S, resumable };
 
 /* ---------- view ----------
    The visible order is recomputed on an explicit sort, filter, search or run
@@ -105,19 +81,29 @@ function noteSummary(run) {
 }
 
 let openToken = 0;
-/* Opens run id: loads it, resets filters and sort, selects the first row. */
-export async function openRun(id) {
-  if (S.active && S.active.run.id === id) return;
+/* Opens run id: loads it, resets filters and sort, selects the first row.
+   Choosing the run that is already open cancels a pending open of another.
+   On failure the error is kept in S.openError (the table shows it when no
+   run is open) and toasted; opts.retry (the automatic retry) toasts only
+   when the failure differs from the last one for the same run. */
+export async function openRun(id, opts) {
   const token = ++openToken;
+  if (S.active && S.active.run.id === id) return;
   let data;
   try {
     data = await api.getRun(id);
   } catch (e) {
-    toast(e.message);
+    if (token !== openToken) return;
+    const prev = S.openError;
+    const repeat = !!(opts && opts.retry) && !!prev && prev.id === id && prev.message === e.message;
+    S.openError = { id, message: e.message };
+    if (!repeat) toast(e.message);
+    if (!S.active) renderAll();
     return;
   }
   if (token !== openToken) return;
   S.active = data;
+  S.openError = null;
   S.landed = {};
   noteSummary(data.run);
   S.f = newFilters();
@@ -145,7 +131,7 @@ export async function stopActive() {
   toast('Run stopped', n + ' finished ' + (n === 1 ? 'result' : 'results') + ' kept. Resume continues with the next unfinished company.');
   refreshView(false);
   renderAll();
-  pollSoon(); // rows that landed since the last poll
+  pollSoon(); // rows that landed since the last poll; drops answers requested before the stop
 }
 
 export async function resumeActive() {
@@ -170,36 +156,72 @@ export async function resumeActive() {
    re-render. Otherwise: GET /api/runs every LIST_MS (every POLL_MS while
    another run is running) so the rail stays current. One failed poll shows
    "Lost contact with the server"; the next success shows "Reconnected". */
-let pollTimer = null;
+
+/* Runs step(fresh) every interval, one call at a time. soon() asks for a
+   call now: when one is in flight, its follow-up runs immediately instead of
+   a second call starting. fresh() tells a call whether soon() has been
+   called since it started, so an answer requested before a Stop or Resume
+   completed is never applied over the newer state. A step that throws still
+   schedules the next call. schedule and cancel default to setTimeout and
+   clearTimeout. */
+export function createPoller(step, opts) {
+  const schedule = opts.schedule || ((fn, ms) => setTimeout(fn, ms));
+  const cancel = opts.cancel || ((t) => clearTimeout(t));
+  let timer = null; let inFlight = false; let again = false; let epoch = 0;
+  async function run() {
+    timer = null; inFlight = true; again = false;
+    const started = epoch;
+    try {
+      await step(() => epoch === started);
+    } catch (e) {
+      // The step reports its own failures.
+    } finally {
+      inFlight = false;
+      timer = schedule(run, again ? 0 : opts.interval);
+      again = false;
+    }
+  }
+  return {
+    start() { if (timer == null && !inFlight) timer = schedule(run, opts.interval); },
+    soon() {
+      epoch++;
+      if (inFlight) { again = true; return; }
+      if (timer != null) cancel(timer);
+      timer = schedule(run, 0);
+    },
+  };
+}
+
 let lastList = 0;
 let lost = false;
 let syncActive = false; // fetch the open run's changes on the next tick even if it is not running
+const poller = createPoller(tick, { interval: POLL_MS });
 
-export function startPolling() {
-  if (pollTimer == null) pollTimer = setTimeout(tick, POLL_MS);
-}
+export function startPolling() { poller.start(); }
 function pollSoon() {
   syncActive = true;
-  clearTimeout(pollTimer);
-  pollTimer = setTimeout(tick, 0);
+  poller.soon();
 }
 
-async function tick() {
-  pollTimer = null;
+async function tick(fresh) {
+  if (!S.setup) {
+    // Boot could not load it. Its own failure neither stops the polling
+    // below nor counts as losing the server.
+    try { S.setup = await api.getSetup(); renderRailFoot(); } catch (e) { /* retried next tick */ }
+  }
   let ok = true;
   try {
-    if (!S.setup) { S.setup = await api.getSetup(); renderRailFoot(); } // boot could not load it
     const a = S.active;
     if (a && (a.run.status === 'running' || syncActive)) {
       syncActive = false;
       const changes = await api.getChanges(a.run.id, a.cursor);
-      if (S.active === a) applyChanges(a, changes);
+      if (S.active === a && fresh()) applyChanges(a, changes);
     } else {
       const other = S.runs.some((r) => r.status === 'running');
       if (other || Date.now() - lastList >= LIST_MS) {
         const list = await api.listRuns();
         lastList = Date.now();
-        applyRunList(list);
+        if (fresh()) applyRunList(list);
       }
     }
   } catch (e) {
@@ -207,7 +229,6 @@ async function tick() {
   }
   if (!ok && !lost) { lost = true; toast('Lost contact with the server'); }
   else if (ok && lost) { lost = false; toast('Reconnected'); }
-  if (pollTimer == null) pollTimer = setTimeout(tick, POLL_MS);
 }
 
 function applyChanges(a, changes) {
@@ -228,9 +249,10 @@ function applyChanges(a, changes) {
 function applyRunList(list) {
   list.forEach((run) => noteSummary(run));
   S.runs = list;
+  S.listLoaded = true;
   if (!S.active) {
-    renderRail();
-    if (list.length) openRun(list[0].id);
+    renderAll(); // the table's notice: no runs, or the open that failed
+    if (list.length) openRun(list[0].id, { retry: true });
     return;
   }
   const mine = list.find((r) => r.id === S.active.run.id);

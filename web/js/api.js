@@ -23,8 +23,9 @@ async function call(method, url, body) {
 }
 
 /* The server's detail: a string for our own errors, a list of {msg} for
-   FastAPI's request validation errors. */
-function detailText(data, status) {
+   FastAPI's request validation errors. data is the parsed body, or null when
+   it was not JSON; the fallback names the status. */
+export function detailText(data, status) {
   const d = data && data.detail;
   if (typeof d === 'string' && d) return d;
   if (Array.isArray(d) && d.length) return d.map((x) => (x && x.msg) || String(x)).join(' ');

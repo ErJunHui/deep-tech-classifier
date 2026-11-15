@@ -2,9 +2,9 @@
    with error rows (Error verdict; — for confidence, criteria and risk;
    action Needs Review) and a window: only visibleRows(S.viewIds, S.limit,
    S.selected) are rendered, followed by a "Showing 200 of 5,000" footer.
-   Without runs it shows the empty state. */
+   Without an open run it shows why (store.tableNotice). */
 import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW } from '../model.js';
-import { S } from '../state.js';
+import { S, tableNotice } from '../store.js';
 import { R, put, verdictHtml, errorVerdictHtml, riskHtml, marksHtml, revTag } from './util.js';
 
 /* "Show all" is offered up to this many rows in the view. */
@@ -37,8 +37,9 @@ function headHtml() {
   }).join('') + '</tr></thead>';
 }
 
-/* One body row. now: Date.now(), for the landing animation. */
-function rowHtml(row, now) {
+/* One body row of the open run (S.active). now: Date.now(), for the landing
+   animation. Exported for tests. */
+export function rowHtml(row, now) {
   const run = S.active.run;
   const v = rowView(row);
   const id = row.index;
@@ -67,7 +68,8 @@ function rowHtml(row, now) {
       '<td class="wb-muted">—</td>' +
       '<td><span class="wb-act is-review">' + v.action + '</span></td>' +
       '<td class="is-r wb-c-patents ' + (pat && pat.count ? '' : 'wb-muted') + '">' + (pat ? pat.count : '—') + '</td>' +
-      '<td class="is-r wb-dim wb-c-cost">' + (r.cost == null ? '<span class="wb-muted">—</span>' : money(r.cost, 3)) + '</td></tr>';
+      // Its real cost when known, else —; never the "?" of a classified row whose model has no listed price.
+      '<td class="is-r wb-dim wb-c-cost">' + (typeof r.cost === 'number' ? money(r.cost, 3) : '<span class="wb-muted">—</span>') + '</td></tr>';
   }
   const low = r.conf < Number((run.settings || {}).validatorThreshold);
   const was = v.reclassified ? '<span class="wb-was" title="Pipeline verdict: ' + vLow(r.verdict) + '"><span class="wb-was-g" aria-hidden="true">↺</span><span class="wb-was-t">was ' + vLow(r.verdict) + '</span></span>' : '';
@@ -88,6 +90,14 @@ function moreHtml(shownCount, total) {
     (total <= SHOW_ALL_MAX ? ' · <button class="wb-linkbtn" data-act="show-all" data-fk="show-all">Show all</button>' : '') + '</div>';
 }
 
+/* The table area without an open run. */
+function noticeHtml(n) {
+  if (!n) return '';
+  if (n.kind === 'empty') return '<div class="wb-empty"><h2>No runs yet</h2><p>Start a run to classify a spreadsheet of companies.</p><button class="wb-btn wb-btn-primary" data-act="new-run" data-fk="empty-new">+ New run</button></div>';
+  if (n.kind === 'offline') return '<div class="wb-empty"><h2>Can’t reach the server</h2><p>Check that the app is still running, then reload this page. It keeps trying in the meantime.</p></div>';
+  return '<div class="wb-empty"><h2>Couldn’t open this run</h2><p>' + esc(n.message) + '</p></div>';
+}
+
 const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
 /* opts.patch: row indexes whose data changed. When the window shows the same
@@ -97,7 +107,7 @@ export function renderTable(opts) {
   const wrap = R('table');
   if (!S.active) {
     shown = null;
-    put(wrap, '<div class="wb-empty"><h2>No runs yet</h2><p>Start a run to classify a spreadsheet of companies.</p><button class="wb-btn wb-btn-primary" data-act="new-run" data-fk="empty-new">+ New run</button></div>');
+    put(wrap, noticeHtml(tableNotice(S)));
     return;
   }
   const rows = S.active.rows;

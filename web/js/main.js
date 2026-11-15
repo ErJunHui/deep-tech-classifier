@@ -18,16 +18,15 @@ async function loadNumberFlow() {
 async function boot() {
   bindEvents();
   await loadNumberFlow();
-  try {
-    const [setup, runs] = await Promise.all([api.getSetup(), api.listRuns()]);
-    S.setup = setup;
-    S.runs = runs;
-  } catch (e) {
-    toast('Could not load the workbench', e.message);
-  }
+  // Each is retried by polling when it fails here (state.js tick).
+  const [setup, runs] = await Promise.allSettled([api.getSetup(), api.listRuns()]);
+  if (setup.status === 'fulfilled') S.setup = setup.value;
+  if (runs.status === 'fulfilled') { S.runs = runs.value; S.listLoaded = true; }
+  else toast('Could not load the workbench', runs.reason.message);
   renderRailFoot();
   if (S.runs.length) await openRun(S.runs[0].id);
-  if (!S.active) renderAll(); // no runs (or the newest could not be opened): the empty state
+  // No open run: the table says why (store.js tableNotice).
+  if (!S.active) renderAll();
   startPolling();
 }
 

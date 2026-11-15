@@ -2,7 +2,7 @@
    histogram. Ported from the prototype's renderStrip, plus the errors
    sub-line under Processed. */
 import { counts, rowView } from '../model.js';
-import { S } from '../state.js';
+import { S } from '../store.js';
 import { R } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
 

@@ -3,7 +3,7 @@
    session (S.sessionRunIds) are listed under "This session", the rest under
    "Recent runs", newest first as GET /api/runs returns them. */
 import { esc, counts, dateLabel } from '../model.js';
-import { S } from '../state.js';
+import { S } from '../store.js';
 import { R, put, kbd, MOD } from './util.js';
 
 /* A run's counts: the open run's from its rows (they include decisions made
@@ -29,7 +29,7 @@ export function renderRail() {
   const activeId = S.active ? S.active.run.id : null;
   const item = (run) => {
     const st = railStatus(run);
-    const sub = [dateLabel(run.createdAt, now), (run.model || '').replace(/^claude-/, '')].filter(Boolean).join(' · ');
+    const sub = [dateLabel(run.createdAt, now), run.model].filter(Boolean).join(' · ');
     const barCls = st.dot === 'is-stopped' || st.dot === 'is-failed' ? st.dot : '';
     return '<button class="wb-runitem" data-act="open-run" data-id="' + esc(run.id) + '" data-fk="rail-' + esc(run.id) + '" aria-current="' + (run.id === activeId) + '">' +
       '<span class="wb-runitem-f">' + esc(run.file) + '</span>' +

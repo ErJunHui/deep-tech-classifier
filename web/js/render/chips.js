@@ -1,7 +1,7 @@
 /* The toolbar: search placeholder, Filters toggle and the filter chips.
    Ported from the prototype's renderChips. Counts are over the whole run. */
 import { esc, counts, anyFilter } from '../model.js';
-import { S } from '../state.js';
+import { S } from '../store.js';
 import { R, put } from './util.js';
 
 const RISKS = ['Escalate', 'Contested', 'Uncertain', 'Clear'];
