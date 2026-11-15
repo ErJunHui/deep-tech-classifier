@@ -166,6 +166,58 @@ export function computeIds(rows, { filters, sortKey, sortDir, running, snapshot 
   });
 }
 
+/* ---------- long tables ---------- */
+/* Rows a table renders at first, and how many more each "Show more" adds. */
+export const ROW_WINDOW = 200;
+
+/* The window of the view a table renders: the first limit ids, extended so
+   selectedId (when it is in the view) is always included. hidden is how many
+   ids of the view are left out. */
+export function visibleRows(viewIds, limit, selectedId) {
+  let n = Math.min(limit, viewIds.length);
+  if (selectedId != null) {
+    const at = viewIds.indexOf(selectedId);
+    if (at >= n) n = at + 1;
+  }
+  return { ids: viewIds.slice(0, n), hidden: viewIds.length - n };
+}
+
+/* What the window depends on: the run, the sort, the filters and the search
+   (as computeIds reads them). When it changes the window goes back to
+   ROW_WINDOW; polling and decisions leave it alone. */
+export function viewKey(runId, sortKey, sortDir, f) {
+  const set = (s) => [...s].sort().join(',');
+  return JSON.stringify([runId, sortKey, sortDir, set(f.risk), set(f.verdict), set(f.status), f.bin, f.q.trim().toLowerCase()]);
+}
+
+/* ---------- polling ---------- */
+/* Merges GET /api/runs/{id}/changes into the open run.
+   active: {run, rows, cursor} as GET /api/runs/{id} returned it (not
+   changed). changes: {run, steps, rows, cursor}; changes.rows are the rows
+   whose result was written since active.cursor, changes.steps the current
+   step of every row that has one ({"<index>": step}).
+   Returns {active, landed, changed}: the merged {run, rows, cursor}, the
+   indexes whose result is new, and every index whose row changed (landed,
+   or a pending row whose step changed). Unchanged rows keep their objects. */
+export function mergeChanges(active, changes) {
+  const rows = active.rows.slice();
+  const landed = []; const changed = [];
+  changes.rows.forEach((r) => {
+    if (!(r.index >= 0 && r.index < rows.length)) return;
+    rows[r.index] = r;
+    landed.push(r.index); changed.push(r.index);
+  });
+  const steps = changes.steps || {};
+  rows.forEach((row, i) => {
+    if (row.result) return;
+    const step = Object.prototype.hasOwnProperty.call(steps, i) ? steps[i] : null;
+    if (row.step === step) return;
+    rows[i] = Object.assign({}, row, { step });
+    changed.push(i);
+  });
+  return { active: { run: changes.run, rows, cursor: changes.cursor }, landed, changed };
+}
+
 /* ---------- decision form ---------- */
 /* view is a rowView with a (non-error) result; form is {choice, note}. */
 export const needsNote = (view, choice) => view.r.risk === 'Clear' && choice === 'change';

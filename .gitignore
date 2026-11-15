@@ -41,3 +41,6 @@ venv/
 
 # The reference set is test data, not a run output
 !tests/reference/companies.xlsx
+
+# Test output (tests/test_webapp/make_big_input.py)
+tests/test_webapp/out/

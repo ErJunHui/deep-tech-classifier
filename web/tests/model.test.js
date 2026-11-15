@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   esc, clamp, pad, money, fmtDur, confWord, signed, flip, vLabel, vLow, actionFor, hhmm, dateLabel,
   currentDecision, rowView, counts, newFilters, anyFilter, computeIds,
-  formProblem, needsNote, startProblem, skippedCount,
+  formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -400,4 +400,87 @@ test('skippedCount: blank cells in the company name column', () => {
   assert.equal(skippedCount(file, { company_name: 'Company' }), 3);
   assert.equal(skippedCount(file, {}), 0);
   assert.equal(skippedCount(file, { company_name: 'Missing' }), 0);
+});
+
+/* ---------- long tables ---------- */
+const range = (n) => Array.from({ length: n }, (_, i) => i);
+test('visibleRows: the first ROW_WINDOW (200) ids by default, the rest counted as hidden', () => {
+  assert.equal(ROW_WINDOW, 200);
+  const view = range(450).reverse();
+  const out = visibleRows(view, ROW_WINDOW, null);
+  assert.deepEqual(out.ids, view.slice(0, 200));
+  assert.equal(out.hidden, 250);
+});
+test('visibleRows: the window grows by 200 and stops at the end of the view', () => {
+  const view = range(450);
+  assert.deepEqual([visibleRows(view, 400, null).ids.length, visibleRows(view, 400, null).hidden], [400, 50]);
+  assert.deepEqual([visibleRows(view, 600, null).ids.length, visibleRows(view, 600, null).hidden], [450, 0]);
+  assert.deepEqual(visibleRows([], 200, null), { ids: [], hidden: 0 });
+});
+test('visibleRows never cuts off the selected row', () => {
+  const view = range(450).map((i) => (i * 7) % 450);
+  const at = view.indexOf(300);
+  assert.ok(at >= 200);
+  const out = visibleRows(view, 200, 300);
+  assert.deepEqual(out.ids, view.slice(0, at + 1));
+  assert.equal(out.hidden, 450 - at - 1);
+  assert.equal(out.ids[out.ids.length - 1], 300);
+});
+test('visibleRows: a selected row inside the window, or not in the view, leaves it as is', () => {
+  const view = range(450);
+  assert.equal(visibleRows(view, 200, 10).ids.length, 200);
+  assert.equal(visibleRows(view, 200, 999).ids.length, 200);
+  assert.equal(visibleRows(view, 200, 0).ids.length, 200);
+});
+test('viewKey: back to the first window when the sort, filters, search or run change', () => {
+  const key = (o = {}) => viewKey(o.run || 'run_a', o.sortKey || 'priority', o.sortDir || 1, o.f || newFilters());
+  const base = key();
+  assert.equal(key(), base, 'the same view keeps its window (polling, decisions)');
+  const withQ = newFilters(); withQ.q = 'acme';
+  const withQSpaces = newFilters(); withQSpaces.q = '  acme ';
+  const withChip = newFilters(); withChip.risk.add('Escalate');
+  const withBin = newFilters(); withBin.bin = 4;
+  for (const changed of [key({ run: 'run_b' }), key({ sortKey: 'name' }), key({ sortDir: -1 }), key({ f: withQ }), key({ f: withChip }), key({ f: withBin })]) {
+    assert.notEqual(changed, base);
+  }
+  assert.equal(key({ f: withQSpaces }), key({ f: withQ }), 'the search is compared as computeIds reads it');
+  const twoA = newFilters(); twoA.risk.add('Escalate'); twoA.risk.add('Contested');
+  const twoB = newFilters(); twoB.risk.add('Contested'); twoB.risk.add('Escalate');
+  assert.equal(key({ f: twoA }), key({ f: twoB }), 'chip order does not matter');
+});
+
+/* ---------- polling ---------- */
+test('mergeChanges: landed rows replace theirs by index, steps follow the server, the rest keep their objects', () => {
+  const rows = [row(0, result()), row(1, null, [], { step: 'Enrichment' }), row(2, null, [], { step: 'Classification' }), row(3, null), row(4, null)];
+  const active = { run: { id: 'r', status: 'running' }, rows, cursor: 3 };
+  const changes = {
+    run: { id: 'r', status: 'running', counts: {} },
+    steps: { 2: 'Validation', 4: 'Enrichment' },
+    rows: [row(1, result({ verdict: 'general tech' }))],
+    cursor: 4,
+  };
+  const out = mergeChanges(active, changes);
+  assert.equal(out.active.run, changes.run);
+  assert.equal(out.active.cursor, 4);
+  assert.deepEqual(out.landed, [1]);
+  assert.deepEqual(out.changed.slice().sort(), [1, 2, 4]);
+  assert.equal(out.active.rows[1], changes.rows[0]);
+  assert.equal(out.active.rows[2].step, 'Validation');
+  assert.equal(out.active.rows[4].step, 'Enrichment');
+  assert.equal(out.active.rows[0], rows[0]);
+  assert.equal(out.active.rows[3], rows[3]);
+  assert.equal(active.rows, rows, 'the open run is not changed');
+  assert.equal(rows[2].step, 'Classification');
+});
+test('mergeChanges: a pending row absent from steps has no step; out-of-range rows are ignored', () => {
+  const active = { run: {}, rows: [row(0, null, [], { step: 'Enrichment' })], cursor: 0 };
+  const out = mergeChanges(active, { run: {}, steps: {}, rows: [row(5, result())], cursor: 1 });
+  assert.equal(out.active.rows[0].step, null);
+  assert.deepEqual([out.landed, out.changed], [[], [0]]);
+});
+test('mergeChanges: a retried error row that lands again counts as landed', () => {
+  const active = { run: {}, rows: [row(0, errorResult())], cursor: 1 };
+  const out = mergeChanges(active, { run: {}, steps: {}, rows: [row(0, result())], cursor: 2 });
+  assert.deepEqual(out.landed, [0]);
+  assert.equal(out.active.rows[0].result.error, false);
 });
