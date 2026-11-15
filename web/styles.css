@@ -607,7 +607,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
    - .wb-stat-s.is-wrap: the Processed stat's "N errors · retried on resume" line takes no part in
      the stat's width and wraps within it, so it never pushes the histogram onto a second row.
    - .wb-runitem-d: a rail item's date and model line is cut with an ellipsis when the model id is
-     too long for the rail. */
+     too long for the rail.
+   - .wb-sempty .wb-snote: an upload's rejection under the drop target's buttons (the prototype
+     never rejected a file there). */
 .v-workbench { grid-template-rows: minmax(0, 1fr); }
 .v-workbench .wb-status.is-failed { background: var(--error-soft); color: var(--error); }
 .v-workbench .wb-status.is-interrupted { background: var(--escalate-soft); color: var(--escalate); }
@@ -621,3 +623,4 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench [data-counter] { font-variant-numeric: tabular-nums; }
 .v-workbench .wb-stat-s.is-wrap { width: 0; min-width: 100%; white-space: normal; }
 .v-workbench .wb-runitem-d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v-workbench .wb-sempty .wb-snote { margin: 12px 0 0; text-align: left; }

@@ -1,19 +1,25 @@
-/* Clicks, typing and keyboard shortcuts for the run view. Ported from the
-   prototype's onClick, onInput, onChange, onRootKey and onDocKey, for the
-   actions this part of the app has: opening runs, selection and J/K/N
-   movement, sorting, filters, search, the table window, Stop/Resume, the
-   evidence panel's sections and the reviewer's decisions. Other actions
-   (new-run, rerun, download, help, palette, reading view) are bound
-   elsewhere; until then their buttons do nothing. */
-import { S, openRun, refreshView, renderDetail, stopActive, resumeActive, resumable } from './state.js';
+/* Clicks, typing, drag and drop, and keyboard shortcuts. Ported from the
+   prototype's onClick, onInput, onChange, onRootKey, onDocKey and the drag
+   handlers, for the actions this part of the app has: opening runs,
+   selection and J/K/N movement, sorting, filters, search, the table window,
+   Stop/Resume, the evidence panel's sections, the reviewer's decisions, and
+   a new run's setup (file, column menus, row ticks, settings popover,
+   analyst sheet, Start). Other actions (download, help, palette, reading
+   view) are bound elsewhere; until then their buttons do nothing. */
+import {
+  S, openRun, refreshView, renderDetail, stopActive, resumeActive, resumable,
+  openSetup, cancelSetup, setupChanged, loadFile, clearFile, startRun,
+} from './state.js';
 import { record, restore, undo } from './decisions.js';
-import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, ROW_WINDOW } from './model.js';
+import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW } from './model.js';
 import { R } from './render/util.js';
 import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
 import { renderTable, rowBtn } from './render/table.js';
 import { syncForm } from './render/detail.js';
 import { toast } from './render/toast.js';
+import { renderSetupTable, openMap, openSettings, closePop, popKind, popOwns, mapField, announce } from './render/setup.js';
+import { openAnalyst, closeAnalyst, trapTab, THRESHOLD_KEYS } from './render/analyst.js';
 
 const root = () => document.querySelector('.v-workbench');
 
@@ -95,7 +101,8 @@ function selectedView() {
   const row = S.active.rows[S.selected];
   return row ? rowView(row) : null;
 }
-const decidable = (v) => !!(v && v.r && !v.error);
+/* Never while a new run is set up: the open run is not on screen. */
+const decidable = (v) => !S.draft && !!(v && v.r && !v.error);
 const selectedKey = () => formKey(S.active.run.id, S.selected);
 
 /* Opens the selected row's decision form with choice (null keeps the
@@ -146,6 +153,54 @@ function leaveNote() {
   if (b) b.focus({ preventScroll: true }); else document.activeElement.blur();
 }
 
+/* ---------- new run setup ---------- */
+/* The column menu's choice: field reads column col ('' for none). */
+function setMapping(col) {
+  const field = mapField();
+  if (!field || !S.draft) return;
+  S.draft.cfg.mapping[field] = col;
+  closePop(false);
+  setupChanged({ table: true });
+  const b = R('table').querySelector('[data-fk="map-' + field + '"]');
+  if (b) b.focus();
+  announce(SETUP_FIELDS.find((x) => x.key === field).label + (col ? ' now reads from ' + col : ' no longer uses a column') + '.');
+}
+/* A row checkbox (index i) or the header checkbox (i null) changed to on. */
+function tick(i, on) {
+  const dr = S.draft;
+  if (!dr || !dr.file) return;
+  if (i == null) {
+    if (on) dr.excluded.clear();
+    else dr.file.table.forEach((cells, j) => dr.excluded.add(j));
+  } else if (on) dr.excluded.delete(i);
+  else dr.excluded.add(i);
+  setupChanged({ table: true });
+}
+function resetThresholds() {
+  if (!S.draft) return;
+  THRESHOLD_KEYS.forEach((k) => { S.draft.cfg[k] = S.setup.defaults[k]; });
+  setupChanged();
+}
+/* A setting field of the popover or the sheet; typing (live) only takes a
+   valid number, a committed blank or invalid number falls back to the
+   default. Switches and radios act on change only; other fields are ignored. */
+function setSetting(t, live) {
+  const d = S.draft.cfg;
+  if (t.hasAttribute('data-num')) {
+    const k = t.getAttribute('data-num');
+    const v = settingValue(k, t.value, live ? null : S.setup.defaults[k]);
+    if (v == null) return;
+    d[k] = v;
+  } else if (t.getAttribute('data-field') === 'model') d.model = t.value;
+  else if (live) return;
+  else if (t.name === 'wb-prov') d.provider = t.value;
+  else if (t.name === 'wb-tier' || t.name === 'wb-q') d.tier = t.value;
+  else if (t.hasAttribute('data-toggle')) d[t.getAttribute('data-toggle')] = t.checked;
+  else return;
+  // While typing, only the numbers follow; the fields re-render on change.
+  setupChanged(live ? { fields: false } : undefined);
+}
+
 /* ---------- events ---------- */
 function onClick(e) {
   const a = e.target.closest('[data-act]');
@@ -154,7 +209,7 @@ function onClick(e) {
   if (!a || !root().contains(a)) return;
   switch (a.getAttribute('data-act')) {
     case 'select': select(+a.getAttribute('data-id'), { focus: true }); break;
-    case 'open-run': openRun(a.getAttribute('data-id')); break;
+    case 'open-run': cancelSetup(false); openRun(a.getAttribute('data-id')); break;
     case 'stop': stopActive(); break;
     case 'resume': resumeActive(); break;
     case 'sort': {
@@ -185,8 +240,12 @@ function onClick(e) {
       refreshFilters(); break;
     }
     case 'filters-toggle': S.filtersOpen = !S.filtersOpen; renderChips(); break;
-    case 'show-more': S.limit += ROW_WINDOW; renderTable(); break;
-    case 'show-all': S.limit = S.viewIds.length; renderTable(); break;
+    case 'show-more':
+      if (S.draft) { S.draft.limit += ROW_WINDOW; renderSetupTable(); } else { S.limit += ROW_WINDOW; renderTable(); }
+      break;
+    case 'show-all':
+      if (S.draft) { S.draft.limit = S.draft.file.table.length; renderSetupTable(); } else { S.limit = S.viewIds.length; renderTable(); }
+      break;
     case 'toggle-sec': {
       const k = a.getAttribute('data-k');
       S.collapsed[k] = !S.collapsed[k];
@@ -200,6 +259,24 @@ function onClick(e) {
     case 'record': recordFromForm(); break;
     case 'cancel-form': if (S.active && S.selected != null) delete S.forms[selectedKey()]; renderDetail(); break;
     case 'undo': undo(); break;
+    /* new run setup */
+    case 'new-run': case 'open-draft': openSetup(null); break;
+    case 'rerun': if (S.active) openSetup(S.active.run); break;
+    case 'cancel-setup': cancelSetup(); break;
+    case 'pick-file': R('file').value = ''; R('file').click(); break;
+    case 'clear-file': clearFile(); break;
+    case 'col-menu': {
+      const f = a.getAttribute('data-field');
+      if (mapField() === f) closePop(true); else openMap(f);
+      break;
+    }
+    case 'map': setMapping(a.getAttribute('data-col')); break;
+    case 'settings-pop': if (popKind() === 'settings') closePop(true); else openSettings(); break;
+    case 'settings-done': closePop(true); break;
+    case 'analyst-open': openAnalyst('analyst-open'); break;
+    case 'analyst-close': closeAnalyst(); break;
+    case 'reset-th': resetThresholds(); break;
+    case 'start': startRun(); break;
     default: break;
   }
 }
@@ -213,11 +290,21 @@ function onInput(e) {
     const key = selectedKey();
     S.forms[key] = Object.assign({ open: true, choice: '' }, S.forms[key], { note: t.value });
     syncForm();
+    return;
   }
+  if (S.draft) setSetting(t, true);
 }
 
 function onChange(e) {
   const t = e.target;
+  if (t === R('file')) { loadFile(t.files && t.files[0]); return; }
+  if (S.draft) {
+    const act = t.getAttribute('data-act');
+    if (act === 'tick-all') tick(null, t.checked);
+    else if (act === 'tick-row') tick(+t.getAttribute('data-i'), t.checked);
+    else setSetting(t, false);
+    return;
+  }
   if (t.name === 'wb-dec') {
     if (!decidable(selectedView())) return;
     const key = selectedKey();
@@ -226,10 +313,42 @@ function onChange(e) {
   }
 }
 
-/* Keys that belong to a focused field. */
+/* Keys inside the analyst sheet: Esc closes it, Tab stays in it. */
+function sheetKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeAnalyst(); }
+  else if (e.key === 'Tab') trapTab(e);
+}
+/* Keys inside a popover: Esc closes it; a column menu moves with the arrow
+   keys, Home and End, and Tab closes it. */
+function popKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closePop(true); return; }
+  if (popKind() !== 'map') return;
+  const opts = [...R('pop').querySelectorAll('.wb-mopt')];
+  let i = opts.indexOf(document.activeElement);
+  if (e.key === 'ArrowDown') i = (i + 1) % opts.length;
+  else if (e.key === 'ArrowUp') i = (i - 1 + opts.length) % opts.length;
+  else if (e.key === 'Home') i = 0;
+  else if (e.key === 'End') i = opts.length - 1;
+  else if (e.key === 'Tab') { e.preventDefault(); closePop(true); return; }
+  else return;
+  e.preventDefault();
+  opts[i].focus();
+}
+/* Esc while setting up: closes the open popover, else cancels the new run. */
+function setupEscape() {
+  if (popKind()) closePop(true); else cancelSetup();
+}
+
+/* Keys that belong to a focused field, an overlay, or the setup. */
 function onRootKey(e) {
   const t = e.target;
   const fk = t.getAttribute ? t.getAttribute('data-fk') : null;
+  if (S.analyst && R('overlay').contains(t)) { sheetKey(e); return; }
+  if (popKind() && R('pop').contains(t)) { popKey(e); return; }
+  if (S.draft) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setupEscape(); }
+    return;
+  }
   if (fk === 'note') {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); recordFromForm(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); leaveNote(); }
@@ -249,10 +368,23 @@ function onRootKey(e) {
 function onDocKey(e) {
   const t = e.target;
   if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
-  if (S.modal || S.analyst) return;
+  if (S.modal) return;
+  if (S.analyst) {
+    if (e.key === 'Escape') { e.preventDefault(); closeAnalyst(); }
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (S.draft) {
+    // Setting up a new run: only these keys; the rest act on a run.
+    if (e.key === 'Escape') setupEscape();
+    else if (e.key === 'o' || e.key === 'O') openSetup(null);
+    else return;
+    e.preventDefault();
+    return;
+  }
   let done = true;
   switch (e.key) {
+    case 'o': case 'O': openSetup(null); break;
     case 'j': case 'J': case 'ArrowDown': move(1); break;
     case 'k': case 'K': case 'ArrowUp': move(-1); break;
     case 'Home': moveTo(false); break;
@@ -271,11 +403,50 @@ function onDocKey(e) {
   if (done) e.preventDefault();
 }
 
+/* Popovers close on a press or focus outside them (their own buttons
+   toggle them), when the table under a column menu scrolls, and on resize. */
+function onPopPointer(e) { if (popKind() && !popOwns(e.target)) closePop(false); }
+function onFocusIn(e) { if (popKind() && !popOwns(e.target)) closePop(false); }
+function onScroll(e) { if (popKind() === 'map' && e.target === R('table')) closePop(false); }
+function onResize() { if (popKind()) closePop(false); }
+
+/* Drag and drop: while setting up, the whole main column takes a spreadsheet. */
+let dragDepth = 0;
+const isFileDrag = (e) => !!(e.dataTransfer && [...(e.dataTransfer.types || [])].indexOf('Files') >= 0);
+const dropOk = (e) => !!S.draft && !S.analyst && R('main').contains(e.target);
+function onDragEnter(e) {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  if (!dropOk(e)) return;
+  dragDepth++;
+  R('main').classList.add('is-drag');
+}
+function onDragOver(e) {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = dropOk(e) ? 'copy' : 'none';
+}
+function onDragLeave(e) {
+  if (!isFileDrag(e) || !dropOk(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) R('main').classList.remove('is-drag');
+}
+function onDrop(e) {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  R('main').classList.remove('is-drag');
+  if (dropOk(e)) loadFile(e.dataTransfer.files && e.dataTransfer.files[0]);
+}
+
 export function bindEvents() {
   const r = root();
-  r.addEventListener('click', onClick);
-  r.addEventListener('input', onInput);
-  r.addEventListener('change', onChange);
-  r.addEventListener('keydown', onRootKey);
+  [
+    ['click', onClick], ['input', onInput], ['change', onChange], ['keydown', onRootKey],
+    ['focusin', onFocusIn], ['pointerdown', onPopPointer],
+    ['dragenter', onDragEnter], ['dragover', onDragOver], ['dragleave', onDragLeave], ['drop', onDrop],
+  ].forEach(([ev, fn]) => r.addEventListener(ev, fn));
+  r.addEventListener('scroll', onScroll, true);
+  window.addEventListener('resize', onResize);
   document.addEventListener('keydown', onDocKey);
 }

@@ -1,10 +1,14 @@
-/* The open run, polling, and the render pass over all regions. Ported from
-   the prototype's openRun, refreshView, stopRun/resumeRun and onTick, with
-   the simulation replaced by the API. The reviewer's decisions are in
-   decisions.js. The state object S lives in store.js
-   and is re-exported here. */
+/* The open run, polling, the render pass over all regions, and the actions
+   of a new run's setup. Ported from the prototype's openRun, refreshView,
+   stopRun/resumeRun, onTick, openSetup, cancelSetup, loadFile and startRun,
+   with the simulation replaced by the API. The reviewer's decisions are in
+   decisions.js. The state object S lives in store.js and is re-exported
+   here. */
 import * as api from './api.js';
-import { currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW } from './model.js';
+import {
+  currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW,
+  newDraft, mappingForFile, startProblem, excludeList, estimateRows, tickedCount,
+} from './model.js';
 import { S, resumable } from './store.js';
 import { R } from './render/util.js';
 import { renderRail, renderRailFoot } from './render/rail.js';
@@ -13,6 +17,11 @@ import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
 import { renderTable } from './render/table.js';
 import { toast } from './render/toast.js';
+import {
+  renderSetup, renderSetupHead, renderSetupTable, renderSetupBar, renderPop, setSetupChrome,
+  focusSetupStart, openMap, closePop, announce,
+} from './render/setup.js';
+import { renderAnalyst, renderAnalystEst, openAnalyst, closeAnalyst } from './render/analyst.js';
 
 const POLL_MS = 1000;
 const LIST_MS = 5000;
@@ -59,9 +68,12 @@ export function renderDetail(opts) {
 }
 
 /* opts.animate: counters roll to their new values (only for the same run's
-   values changing). */
+   values changing). While a new run is set up (S.draft) the main column
+   shows the setup instead of the open run, and the evidence panel is empty. */
 export function renderAll(opts) {
   renderRail();
+  setSetupChrome(!!S.draft);
+  if (S.draft) { renderSetup(); renderAnalyst(); renderDetail(); return; }
   renderHead(opts); renderStrip(opts); renderChips(); renderTable(); renderDetail();
 }
 
@@ -266,4 +278,171 @@ function applyRunList(list) {
   const mine = list.find((r) => r.id === S.active.run.id);
   if (mine && mine.status !== S.active.run.status) syncActive = true;
   renderRail();
+}
+
+/* ---------- new run setup ----------
+   "+ New run" turns the main column into the draft run (S.draft): the
+   uploaded spreadsheet becomes the table at once, column mapping lives in
+   the headers, rows are ticked in or out in place, and the action bar
+   starts it. On Start the same table shows the live run. Leaving setup
+   (Cancel, Esc, or opening a run from the rail) discards the draft. */
+const ESTIMATE_DEBOUNCE_MS = 250;
+let setupRet = null; // data-fk of the control focused before setup opened
+let estTimer = null; let estToken = 0;
+let uploadToken = 0;
+let starting = false;
+
+/* Opens setup: a fresh draft, or (fromRun, "Same settings…") one with that
+   run's settings and no file. With a draft already open and no fromRun it
+   only moves focus to it. */
+export function openSetup(fromRun) {
+  if (!S.setup) { toast('Can’t set up a new run yet', 'The settings could not be loaded from the server. It keeps trying.'); return; }
+  if (S.draft && !fromRun) { focusSetupStart(); return; }
+  if (!S.draft) {
+    const a = document.activeElement;
+    setupRet = a && a.getAttribute ? a.getAttribute('data-fk') : null;
+  }
+  closePop(false); closeAnalyst(false);
+  S.draft = newDraft(S.setup, fromRun);
+  uploadToken++;
+  renderAll();
+  R('table').scrollTop = 0;
+  focusSetupStart();
+  estimateSoon();
+}
+
+/* Discards the draft and shows the open run. restoreFocus (default true):
+   focus goes back to where it was before setup opened, else to the open
+   run in the rail. */
+export function cancelSetup(restoreFocus) {
+  if (!S.draft) return;
+  closeAnalyst(false);
+  S.draft = null;
+  uploadToken++; estToken++;
+  clearTimeout(estTimer);
+  renderAll();
+  if (restoreFocus === false) return;
+  const ret = setupRet && document.querySelector('[data-fk="' + setupRet + '"]');
+  const b = ret || (S.active && document.querySelector('[data-fk="rail-' + S.active.run.id + '"]'));
+  if (b) b.focus();
+}
+
+/* After the draft changed: re-renders what shows it and asks for a new
+   estimate. opts.table: the table too (mapping, ticks). opts.fields false:
+   only the numbers, while a field of the sheet is being typed in. */
+export function setupChanged(opts) {
+  const dr = S.draft;
+  if (!dr) return;
+  dr.startError = '';
+  renderRail();
+  renderSetupHead();
+  if (opts && opts.table) renderSetupTable();
+  renderSetupBar();
+  if (opts && opts.fields === false) renderAnalystEst();
+  else { renderPop(); renderAnalyst(); }
+  estimateSoon();
+}
+
+/* POST /api/estimate for the draft, ESTIMATE_DEBOUNCE_MS after the last
+   change. The previous numbers stay until the answer to the latest request
+   arrives; older answers are dropped. */
+function estimateSoon() {
+  clearTimeout(estTimer);
+  estTimer = setTimeout(async () => {
+    const dr = S.draft;
+    if (!dr) return;
+    const token = ++estToken;
+    let est;
+    try { est = await api.postEstimate(dr.cfg, estimateRows(dr)); } catch (e) { return; }
+    if (token !== estToken || S.draft !== dr) return;
+    dr.est = est;
+    renderSetupBar(); renderAnalystEst();
+  }, ESTIMATE_DEBOUNCE_MS);
+}
+
+/* Uploads file (a File from the picker or a drop) and shows its rows. The
+   server's rejection is shown with the file area. */
+export async function loadFile(file) {
+  const dr = S.draft;
+  if (!file || !dr) return;
+  const token = ++uploadToken;
+  dr.reading = file.name; dr.error = '';
+  renderSetupHead();
+  if (!dr.file) renderSetupTable();
+  announce('Reading ' + file.name + '…');
+  let info;
+  try {
+    info = await api.uploadFile(file);
+  } catch (e) {
+    if (token !== uploadToken || S.draft !== dr) return;
+    dr.reading = ''; dr.error = e.message;
+    renderSetupHead(); renderSetupTable();
+    announce(e.message);
+    return;
+  }
+  if (token !== uploadToken || S.draft !== dr) return;
+  dr.reading = ''; dr.error = ''; dr.startError = '';
+  dr.file = info;
+  dr.excluded = new Set();
+  dr.limit = ROW_WINDOW;
+  dr.cfg.mapping = mappingForFile(dr.cfg.mapping, info, !!dr.fromId);
+  closePop(false);
+  renderRail();
+  renderSetup({ enter: true }); renderAnalyst();
+  const mapped = !!dr.cfg.mapping.company_name;
+  announce('Loaded ' + info.rows + ' companies from ' + info.name + (mapped ? '.' : '. Choose the company name column to continue.'));
+  const t = document.querySelector(mapped ? '[data-fk="start"]' : '[data-fk="map-company_name"]');
+  if (t) t.focus();
+  estimateSoon();
+}
+
+/* "Change file": back to the drop target, keeping the settings. */
+export function clearFile() {
+  const dr = S.draft;
+  if (!dr) return;
+  uploadToken++;
+  dr.file = null; dr.reading = ''; dr.error = '';
+  dr.excluded = new Set(); dr.limit = ROW_WINDOW;
+  closePop(false);
+  setupChanged({ table: true });
+  focusSetupStart();
+}
+
+/* Takes the user to what blocks the start (model.startProblem's fix). */
+function fixProblem(prob) {
+  if (prob.fix === 'map') openMap('company_name');
+  else if (prob.fix === 'sheet') openAnalyst('start');
+  else {
+    const b = document.querySelector(prob.fix === 'rows' ? '[data-fk="inc-all"]' : '[data-fk="pick-file"]');
+    if (b) b.focus();
+  }
+}
+
+/* Start: creates the run from the ticked rows, adds it to "This session",
+   opens it in the same table and focuses Stop. A refusal is shown in the
+   action bar. */
+export async function startRun() {
+  const dr = S.draft;
+  if (!dr || starting) return;
+  const prob = startProblem(dr, S.setup);
+  if (prob) { fixProblem(prob); return; }
+  starting = true;
+  let run;
+  try {
+    run = await api.createRun(dr.file.fileId, dr.cfg, excludeList(dr.excluded, dr.file.table.length));
+  } catch (e) {
+    if (S.draft === dr) { dr.startError = e.message; renderSetupBar(); }
+    return;
+  } finally {
+    starting = false;
+  }
+  S.sessionRunIds.add(run.id);
+  noteSummary(run);
+  if (S.draft !== dr) { renderRail(); return; }
+  const n = tickedCount(dr);
+  await openRun(run.id);
+  if (S.draft === dr) cancelSetup(false);
+  announce('Run started for ' + n + (n === 1 ? ' company.' : ' companies.'));
+  const stop = R('head').querySelector('[data-fk="stop"]');
+  if (stop) stop.focus();
 }

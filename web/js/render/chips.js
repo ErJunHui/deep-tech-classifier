@@ -7,6 +7,7 @@ import { R, put } from './util.js';
 const RISKS = ['Escalate', 'Contested', 'Uncertain', 'Clear'];
 
 export function renderChips() {
+  if (S.draft) return; // hidden while a new run is set up
   const tools = R('tools');
   tools.hidden = !S.active;
   if (!S.active) { R('chips').innerHTML = ''; return; }

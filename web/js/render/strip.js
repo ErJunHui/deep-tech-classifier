@@ -8,6 +8,7 @@ import { counterHtml, putWithCounters } from './counter.js';
 
 /* opts.animate: the counters roll to their new values (polling, decisions). */
 export function renderStrip(opts) {
+  if (S.draft) return; // hidden while a new run is set up
   const el = R('strip');
   el.hidden = !S.active;
   if (!S.active) { el.innerHTML = ''; return; }

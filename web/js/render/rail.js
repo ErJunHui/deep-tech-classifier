@@ -1,8 +1,9 @@
 /* The left rail: the run list and the API key list. Ported from the
    prototype's renderRail and renderRailFoot. Runs created in this browser
    session (S.sessionRunIds) are listed under "This session", the rest under
-   "Recent runs", newest first as GET /api/runs returns them. */
-import { esc, counts, dateLabel } from '../model.js';
+   "Recent runs", newest first as GET /api/runs returns them. A new run
+   being set up (S.draft) is listed above them as "New run · Not started". */
+import { esc, counts, dateLabel, tickedCount } from '../model.js';
 import { S } from '../store.js';
 import { R, put, kbd, MOD } from './util.js';
 
@@ -24,9 +25,19 @@ function railStatus(run) {
   return { dot: 'is-complete', text: k.total + ' companies · ' + (k.open ? k.open + ' to review' : 'all reviewed') };
 }
 
+/* The draft being set up, at the top of the rail. */
+function draftItem() {
+  const dr = S.draft;
+  return '<div class="wb-rail-h">Setting up</div><button class="wb-runitem" data-act="open-draft" data-fk="rail-draft" aria-current="true">' +
+    '<span class="wb-runitem-f">New run</span>' +
+    '<span class="wb-runitem-m"><span class="wb-dot is-draft"></span><span>Not started</span></span>' +
+    '<span class="wb-runitem-d">' + (dr.file ? esc(dr.file.name) + ' · ' + tickedCount(dr) + ' companies' : 'No file yet') + '</span></button>';
+}
+
 export function renderRail() {
   const now = new Date();
-  const activeId = S.active ? S.active.run.id : null;
+  // While a new run is set up, no run is the current item: the draft is.
+  const activeId = S.active && !S.draft ? S.active.run.id : null;
   const item = (run) => {
     const st = railStatus(run);
     const sub = [dateLabel(run.createdAt, now), run.model].filter(Boolean).join(' · ');
@@ -40,7 +51,7 @@ export function renderRail() {
   };
   const fresh = S.runs.filter((r) => S.sessionRunIds.has(r.id));
   const older = S.runs.filter((r) => !S.sessionRunIds.has(r.id));
-  let html = '';
+  let html = S.draft ? draftItem() : '';
   if (fresh.length) html += '<div class="wb-rail-h">This session</div>' + fresh.map(item).join('');
   if (older.length) html += '<div class="wb-rail-h">Recent runs</div>' + older.map(item).join('');
   put(R('rail'), html);

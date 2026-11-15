@@ -27,6 +27,7 @@ function cfgTags(cfg, batch) {
 
 /* opts.animate: the counters roll to their new values (polling, decisions). */
 export function renderHead(opts) {
+  if (S.draft) return; // the setup head (render/setup.js)
   const el = R('head');
   el.hidden = !S.active;
   if (!S.active) { el.innerHTML = ''; return; }

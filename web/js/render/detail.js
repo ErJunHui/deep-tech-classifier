@@ -28,7 +28,7 @@ export function renderDetail(opts) {
   const el = R('detail');
   if (!el) return;
   const keep = el.scrollTop;
-  if (!S.active) { put(el, ''); return; }
+  if (!S.active || S.draft) { put(el, ''); return; }
   const row = S.selected == null ? null : S.active.rows[S.selected];
   if (!row) { put(el, '<div class="wb-d-empty">Select a row to see its evidence.<br>' + kbd('J') + ' ' + kbd('K') + ' move through the table · ' + kbd('?') + ' all shortcuts</div>'); return; }
   const run = S.active.run;

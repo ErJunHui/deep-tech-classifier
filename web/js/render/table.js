@@ -1,8 +1,10 @@
 /* The results table. Ported from the prototype's headHtml and renderTable,
    with error rows (Error verdict; — for confidence, criteria and risk;
    action Needs Review) and a window: only visibleRows(S.viewIds, S.limit,
-   S.selected) are rendered, followed by a "Showing 200 of 5,000" footer.
-   Without an open run it shows why (store.tableNotice). */
+   S.selected) are rendered, followed by a "Showing 200 of 5,000" footer,
+   which the setup table shares (moreHtml). Without an open run it shows why
+   (store.tableNotice). While a new run is set up (S.draft) the table area is
+   the setup table's (render/setup.js) and renderTable leaves it alone. */
 import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW } from '../model.js';
 import { S, tableNotice } from '../store.js';
 import { R, put, verdictHtml, errorVerdictHtml, riskHtml, marksHtml, revTag } from './util.js';
@@ -83,7 +85,8 @@ export function rowHtml(row, now) {
     '<td class="is-r wb-dim wb-c-cost">' + (r.cost == null ? '<span title="Pinned model has no listed price">?</span>' : money(r.cost, 3)) + '</td></tr>';
 }
 
-function moreHtml(shownCount, total) {
+/* The footer under a table that shows shownCount of its total rows. */
+export function moreHtml(shownCount, total) {
   const more = Math.min(ROW_WINDOW, total - shownCount);
   return '<div class="wb-more"><span class="wb-num">Showing ' + n(shownCount) + ' of ' + n(total) + '</span>' +
     ' · <button class="wb-linkbtn" data-act="show-more" data-fk="show-more">Show ' + n(more) + ' more</button>' +
@@ -104,6 +107,7 @@ const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
    rows in the same order as last time, only those rows are replaced and the
    rest of the body is left alone; otherwise the table is rendered again. */
 export function renderTable(opts) {
+  if (S.draft) { shown = null; return; }
   const wrap = R('table');
   if (!S.active) {
     shown = null;

@@ -292,7 +292,7 @@ export function formProblem(view, form) {
 export const skippedCount = (file, mapping) => file.emptyCounts[mapping.company_name] || 0;
 
 /* Rows of the draft's file that would be classified (see startProblem). */
-function tickedCount(draft) {
+export function tickedCount(draft) {
   const file = draft.file; const excluded = draft.excluded || new Set();
   if (!file.table || !file.headers) return Math.max(0, file.rows - excluded.size);
   const col = file.headers.indexOf(draft.cfg.mapping.company_name);
@@ -320,4 +320,141 @@ export function startProblem(draft, setup) {
   if (!p) return { fix: 'sheet', label: 'Choose a provider to start', text: 'The selected provider is not available. Choose another provider in Analyst settings.' };
   if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: 'Ask your admin to add ' + p.keyVar + ' to .env, or choose another provider in Analyst settings.' };
   return null;
+}
+
+/* The setup table's input columns, in table order: the Settings mapping key
+   and the header label. */
+export const SETUP_FIELDS = Object.freeze([
+  { key: 'company_name', label: 'Company name', required: true },
+  { key: 'uen', label: 'UEN' },
+  { key: 'domain', label: 'Domain / industry' },
+  { key: 'description', label: 'Description' },
+]);
+
+/* A new draft run (S.draft). setup is GET /api/setup; fromRun, for "Same
+   settings…", a RunSummary whose settings are copied over the defaults. The
+   cfg never shares objects with either. Besides cfg, file and excluded
+   (see startProblem): fromId names the run it came from; limit is the setup
+   table's row window (visibleRows); reading is the name of the file being
+   uploaded and error the last upload's rejection; est is the last
+   POST /api/estimate answer and startError the last POST /api/runs
+   refusal. */
+export function newDraft(setup, fromRun) {
+  const copy = (o) => JSON.parse(JSON.stringify(o || {}));
+  const cfg = Object.assign(copy(setup.defaults), fromRun ? copy(fromRun.settings) : {});
+  cfg.mapping = Object.assign({}, cfg.mapping);
+  return {
+    cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null, limit: ROW_WINDOW,
+    reading: '', error: '', est: null, startError: '',
+  };
+}
+
+/* The mapping to use with a newly loaded file (the inspect dict). A fresh
+   draft takes the file's detected mapping. keep (a "Same settings…" draft)
+   keeps each column of mapping that is among the file's headers; every other
+   field is cleared and takes the detected column, or '' when none was
+   detected. */
+export function mappingForFile(mapping, file, keep) {
+  if (!keep) return Object.assign({}, file.mapping);
+  const out = {};
+  SETUP_FIELDS.forEach(({ key }) => {
+    const col = mapping[key];
+    out[key] = col && file.headers.indexOf(col) >= 0 ? col : (file.mapping[key] || '');
+  });
+  return out;
+}
+
+/* The state of field key's column chip: 'missing' (required, no column),
+   'off' (no column), 'dup' (another field reads the same column), 'auto'
+   (the detected column) or 'changed'. detected: the file's detected mapping. */
+export function mapState(mapping, detected, key) {
+  const col = mapping[key] || '';
+  if (!col) return SETUP_FIELDS.some((f) => f.key === key && f.required) ? 'missing' : 'off';
+  if (SETUP_FIELDS.some((f) => f.key !== key && mapping[f.key] === col)) return 'dup';
+  return col === detected[key] ? 'auto' : 'changed';
+}
+
+/* The header checkbox over rows file rows with excluded left out: 'all'
+   (checked), 'none' (unchecked) or 'some' (indeterminate). */
+export function tickAllState(rows, excluded) {
+  if (!excluded.size) return 'all';
+  return excluded.size >= rows ? 'none' : 'some';
+}
+
+/* POST /api/runs exclude: the left-out rows of a file of rows rows, ascending. */
+export const excludeList = (excluded, rows) => [...excluded].filter((i) => i >= 0 && i < rows).sort((a, b) => a - b);
+
+/* Rows the estimate is for: the ticked companies, or 20 before a file is chosen. */
+export const ESTIMATE_SAMPLE = 20;
+export const estimateRows = (draft) => (draft.file ? tickedCount(draft) : ESTIMATE_SAMPLE);
+
+/* The Start button: 'Classify 18 companies · ~US$0.45 · about 2 min'. est:
+   POST /api/estimate's answer, or null before the first one. */
+export function classifyLabel(n, est) {
+  const head = 'Classify ' + n.toLocaleString('en-US') + ' compan' + (n === 1 ? 'y' : 'ies');
+  if (!est) return head;
+  return head + ' · ' + (est.known ? '~US$' + est.cost.toFixed(2) : 'cost unknown') + ' · about ' + fmtDur(est.secs).slice(1);
+}
+/* The estimate's caveat, naming the model it was priced as when that is not
+   the run's model (estimate pricedAs). */
+export const estimateNote = (est) => 'Rough estimate' + (est.pricedAs ? '; priced as ' + est.pricedAs + '; the run is priced by the version the API reports' : '') + '.';
+/* Why the cost is unknown; '' when it is known. */
+export function unknownCostLine(est) {
+  if (est.known) return '';
+  return est.pinned
+    ? 'Pinned model is not priced in pipeline/models.py; token totals will be reported instead.'
+    : est.model + ' has no listed price; the cost is shown after the run if the API reports a priced version.';
+}
+
+/* Headers no field reads: they are kept unchanged in the output. */
+export function extraColumns(headers, mapping) {
+  const used = Object.values(mapping).filter(Boolean);
+  return headers.filter((h) => used.indexOf(h) < 0);
+}
+/* The warning when no description column is mapped; '' when one is. */
+export function noDescriptionNote(cfg) {
+  if (cfg.mapping.description) return '';
+  return cfg.enrichment
+    ? 'No description column: classification will rely on web enrichment.'
+    : 'No description and enrichment is off: companies without patents are capped at ' + cfg.lowEvidenceCap + ' confidence.';
+}
+/* The first non-blank cell of column col in the file's table; '' when none. */
+export function cellExample(file, col) {
+  const i = file.headers.indexOf(col);
+  if (i < 0) return '';
+  const row = file.table.find((cells) => String(cells[i] == null ? '' : cells[i]).trim());
+  return row ? row[i] : '';
+}
+
+/* The model a run with cfg would use: the pinned model, else the provider's
+   tier model from setup (GET /api/setup); '' for an unknown provider. */
+export function modelFor(cfg, setup) {
+  const pin = (cfg.model || '').trim();
+  if (pin) return pin;
+  const p = setup.providers.find((x) => x.id === cfg.provider);
+  return (p && p.tiers[cfg.tier]) || '';
+}
+/* Whether cfg differs from the defaults in anything but the tier (the
+   quality level names that) and the mapping. */
+export const isCustom = (cfg, defaults) => Object.keys(defaults).some((k) => k !== 'tier' && k !== 'mapping' && String(defaults[k]) !== String(cfg[k]));
+
+/* Bounds of the numeric settings (webapp/settings_map.py _BOUNDS). */
+export const SETTING_BOUNDS = Object.freeze({
+  validatorThreshold: [0, 100], overrideMinConfidence: [0, 100], lowEvidenceCap: [0, 100],
+  epoAdjustMax: [0, 30], maxWebSearches: [0, 10], enrichmentMaxSearches: [0, 10],
+});
+/* A typed numeric setting: rounded and clamped to its bounds, or fallback
+   when raw is blank or not a number. */
+export function settingValue(key, raw, fallback) {
+  const s = String(raw == null ? '' : raw).trim();
+  const n = Number(s);
+  if (!s || !Number.isFinite(n)) return fallback;
+  const b = SETTING_BOUNDS[key];
+  return clamp(Math.round(n), b[0], b[1]);
+}
+/* Whether model is a pinned model that has no listed price (not in
+   GET /api/setup pricedModels). */
+export function pinUnpriced(model, pricedModels) {
+  const m = (model || '').trim();
+  return !!m && pricedModels.indexOf(m) < 0;
 }

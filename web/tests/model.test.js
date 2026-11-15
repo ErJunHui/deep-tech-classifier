@@ -6,6 +6,9 @@ import {
   formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
   pushUndo, popUndo, decisionVerdict, editChoice, changeChoice, recordToast, restoreToast, undoToast,
   decisionErrorPlace, undoFailureKeeps, busyNotice,
+  tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
+  classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
+  modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -569,4 +572,158 @@ test('busyNotice: from 300 ms into the request, once', () => {
   assert.equal(busyNotice(1000, 1299, false), false);
   assert.equal(busyNotice(1000, 1300, false), true);
   assert.equal(busyNotice(1000, 5000, true), false);
+});
+
+/* ---------- new run setup: the rules behind the setup table ---------- */
+const DEFAULTS = {
+  provider: 'anthropic', tier: 'fast', model: '', enrichment: true, epo: true, validator: true, batch: true,
+  validatorThreshold: 70, overrideMinConfidence: 65, epoAdjustMax: 15, lowEvidenceCap: 60,
+  maxWebSearches: 3, enrichmentMaxSearches: 2, mapping: {},
+};
+const SETUP_INFO = {
+  providers: [
+    { id: 'anthropic', label: 'Anthropic', keyVar: 'ANTHROPIC_API_KEY', keySet: true, batch: true, tiers: { fast: 'model-a-fast', balanced: 'model-a-mid', best: 'model-a-best' } },
+    { id: 'openai', label: 'OpenAI', keyVar: 'OPENAI_API_KEY', keySet: false, batch: false, tiers: { fast: 'model-o-fast', balanced: 'model-o-mid', best: 'model-o-best' } },
+  ],
+  defaults: DEFAULTS,
+  pricedModels: ['model-a-fast', 'model-a-mid'],
+};
+const upload = (o = {}) => Object.assign({
+  fileId: 'f'.repeat(32), name: 'list.xlsx', rows: 3,
+  headers: ['Company', 'About', 'Sector', 'UEN', 'City'],
+  mapping: { company_name: 'Company', description: 'About', domain: 'Sector', uen: 'UEN' },
+  preview: [], table: [['Alpha', '', 'Bio', 'U1', 'SG'], ['Beta', 'Lasers', 'Optics', 'U2', ''], ['', 'x', 'y', 'U3', 'SG']],
+  emptyCounts: { Company: 1, About: 1, Sector: 0, UEN: 0, City: 1 },
+}, o);
+
+test('SETUP_FIELDS: the setup table columns in order; only the company name is required', () => {
+  assert.deepEqual(SETUP_FIELDS.map((f) => f.key), ['company_name', 'uen', 'domain', 'description']);
+  assert.deepEqual(SETUP_FIELDS.filter((f) => f.required).map((f) => f.key), ['company_name']);
+});
+test('newDraft: a fresh draft takes copies of the defaults, no file and no rows left out', () => {
+  const d = newDraft(SETUP_INFO, null);
+  assert.deepEqual(d.cfg, DEFAULTS);
+  assert.notEqual(d.cfg, DEFAULTS);
+  assert.notEqual(d.cfg.mapping, DEFAULTS.mapping);
+  assert.equal(d.file, null);
+  assert.ok(d.excluded instanceof Set && d.excluded.size === 0);
+  assert.equal(d.fromId, null);
+  assert.equal(d.limit, ROW_WINDOW);
+  assert.deepEqual([d.reading, d.error, d.est, d.startError], ['', '', null, '']);
+});
+test('newDraft: "Same settings…" copies the run settings over the defaults, never sharing them', () => {
+  const run = { id: 'run_1', settings: { provider: 'openai', tier: 'best', validatorThreshold: 50, mapping: { company_name: 'Name' } } };
+  const d = newDraft(SETUP_INFO, run);
+  assert.equal(d.fromId, 'run_1');
+  assert.equal(d.cfg.provider, 'openai');
+  assert.equal(d.cfg.tier, 'best');
+  assert.equal(d.cfg.validatorThreshold, 50);
+  assert.equal(d.cfg.lowEvidenceCap, 60);
+  assert.deepEqual(d.cfg.mapping, { company_name: 'Name' });
+  d.cfg.mapping.company_name = 'Other';
+  assert.equal(run.settings.mapping.company_name, 'Name');
+  assert.equal(d.file, null);
+});
+test('mappingForFile: a fresh draft takes the detected mapping', () => {
+  const file = upload();
+  const m = mappingForFile({ company_name: 'Old' }, file, false);
+  assert.deepEqual(m, file.mapping);
+  assert.notEqual(m, file.mapping);
+});
+test('mappingForFile: a kept mapping keeps present columns; absent ones are cleared and re-detected', () => {
+  const file = upload({ mapping: { company_name: 'Company', domain: 'Sector' } });
+  const m = mappingForFile({ company_name: 'City', description: 'Blurb', uen: 'UEN' }, file, true);
+  // City is in the file: kept. Blurb is not: re-detected, and nothing was detected for it.
+  // uen is kept; domain had no column: detected.
+  assert.deepEqual(m, { company_name: 'City', description: '', domain: 'Sector', uen: 'UEN' });
+});
+test('mapState: Required, Skipped, Used twice, Detected, Changed', () => {
+  const detected = { company_name: 'Company', description: 'About' };
+  assert.equal(mapState({}, detected, 'company_name'), 'missing');
+  assert.equal(mapState({ description: '' }, detected, 'description'), 'off');
+  assert.equal(mapState({ company_name: 'About', description: 'About' }, detected, 'description'), 'dup');
+  assert.equal(mapState({ company_name: 'About', description: 'About' }, detected, 'company_name'), 'dup');
+  assert.equal(mapState({ company_name: 'Company' }, detected, 'company_name'), 'auto');
+  assert.equal(mapState({ company_name: 'Sector' }, detected, 'company_name'), 'changed');
+  assert.equal(mapState({ uen: 'UEN' }, detected, 'uen'), 'changed');
+});
+test('tickAllState: all, none or some of the file rows ticked', () => {
+  assert.equal(tickAllState(3, new Set()), 'all');
+  assert.equal(tickAllState(3, new Set([1])), 'some');
+  assert.equal(tickAllState(3, new Set([0, 1, 2])), 'none');
+  assert.equal(tickAllState(5000, new Set(Array.from({ length: 5000 }, (_, i) => i))), 'none');
+});
+test('excludeList: the left-out rows in ascending order, only rows of the file', () => {
+  assert.deepEqual(excludeList(new Set([12, 2, 7]), 20), [2, 7, 12]);
+  assert.deepEqual(excludeList(new Set([1, 5, -1]), 3), [1]);
+  assert.deepEqual(excludeList(new Set(), 3), []);
+});
+test('tickedCount: rows not left out whose company name is not blank', () => {
+  const draft = { file: upload(), cfg: { mapping: { company_name: 'Company' } }, excluded: new Set([0]) };
+  assert.equal(tickedCount(draft), 1);
+  draft.excluded = new Set();
+  assert.equal(tickedCount(draft), 2);
+});
+test('estimateRows: the ticked companies, or 20 before a file is chosen', () => {
+  assert.equal(estimateRows({ file: null, cfg: { mapping: {} }, excluded: new Set() }), 20);
+  assert.equal(estimateRows({ file: upload(), cfg: { mapping: { company_name: 'Company' } }, excluded: new Set([1]) }), 1);
+});
+test('classifyLabel: count, cost and duration; unknown cost; nothing estimated yet', () => {
+  const est = { known: true, cost: 0.4512, secs: 120 };
+  assert.equal(classifyLabel(18, est), 'Classify 18 companies · ~US$0.45 · about 2 min');
+  assert.equal(classifyLabel(1, { known: false, cost: null, secs: 18 }), 'Classify 1 company · cost unknown · about 18 s');
+  assert.equal(classifyLabel(5, null), 'Classify 5 companies');
+  assert.equal(classifyLabel(2000, { known: true, cost: 12, secs: 5400 }), 'Classify 2,000 companies · ~US$12.00 · about 1 h 30 min');
+});
+test('estimateNote: a rough estimate, naming the stand-in price when there is one', () => {
+  assert.equal(estimateNote({ pricedAs: null }), 'Rough estimate.');
+  assert.equal(estimateNote({ pricedAs: 'model-<v1>' }), 'Rough estimate; priced as model-<v1>; the run is priced by the version the API reports.');
+});
+test('unknownCostLine: why the cost is unknown, pinned or not; empty when known', () => {
+  assert.equal(unknownCostLine({ known: true, pinned: false, model: 'm' }), '');
+  assert.equal(unknownCostLine({ known: false, pinned: true, model: 'm' }), 'Pinned model is not priced in pipeline/models.py; token totals will be reported instead.');
+  assert.equal(unknownCostLine({ known: false, pinned: false, model: 'm-latest' }), 'm-latest has no listed price; the cost is shown after the run if the API reports a priced version.');
+});
+test('extraColumns: headers no field reads, in file order', () => {
+  assert.deepEqual(extraColumns(['Company', 'About', 'City', 'Funding'], { company_name: 'Company', description: 'About', uen: '' }), ['City', 'Funding']);
+  assert.deepEqual(extraColumns(['A'], { company_name: 'A' }), []);
+});
+test('noDescriptionNote: wording depends on enrichment; empty when a description is mapped', () => {
+  assert.equal(noDescriptionNote({ mapping: { description: 'About' }, enrichment: true, lowEvidenceCap: 60 }), '');
+  assert.equal(noDescriptionNote({ mapping: {}, enrichment: true, lowEvidenceCap: 60 }), 'No description column: classification will rely on web enrichment.');
+  assert.equal(noDescriptionNote({ mapping: { description: '' }, enrichment: false, lowEvidenceCap: 55 }), 'No description and enrichment is off: companies without patents are capped at 55 confidence.');
+});
+test('cellExample: the first non-blank cell of a column; empty when there is none', () => {
+  const file = upload();
+  assert.equal(cellExample(file, 'About'), 'Lasers');
+  assert.equal(cellExample(file, 'Company'), 'Alpha');
+  assert.equal(cellExample(upload({ table: [['', '  ', '', '', '']] }), 'About'), '');
+  assert.equal(cellExample(file, 'Missing'), '');
+});
+test('modelFor: the pinned model, else the tier model of the provider from setup', () => {
+  assert.equal(modelFor({ provider: 'openai', tier: 'best', model: '' }, SETUP_INFO), 'model-o-best');
+  assert.equal(modelFor({ provider: 'openai', tier: 'best', model: '  pinned-1 ' }, SETUP_INFO), 'pinned-1');
+  assert.equal(modelFor({ provider: 'nosuch', tier: 'best', model: '' }, SETUP_INFO), '');
+});
+test('isCustom: any setting but the tier and mapping differs from the defaults', () => {
+  assert.equal(isCustom(Object.assign({}, DEFAULTS, { tier: 'best', mapping: { company_name: 'X' } }), DEFAULTS), false);
+  assert.equal(isCustom(Object.assign({}, DEFAULTS, { validatorThreshold: 71 }), DEFAULTS), true);
+  assert.equal(isCustom(Object.assign({}, DEFAULTS, { batch: false }), DEFAULTS), true);
+  assert.equal(isCustom(Object.assign({}, DEFAULTS, { model: 'pinned' }), DEFAULTS), true);
+});
+test('settingValue: a typed number rounded and clamped to its bounds; otherwise the fallback', () => {
+  assert.equal(settingValue('validatorThreshold', '150', 70), 100);
+  assert.equal(settingValue('validatorThreshold', '-5', 70), 0);
+  assert.equal(settingValue('epoAdjustMax', '40', 15), 30);
+  assert.equal(settingValue('maxWebSearches', '12.6', 3), 10);
+  assert.equal(settingValue('enrichmentMaxSearches', '2.4', 2), 2);
+  assert.equal(settingValue('lowEvidenceCap', '', 60), 60);
+  assert.equal(settingValue('lowEvidenceCap', 'abc', 60), 60);
+  assert.equal(settingValue('overrideMinConfidence', '66', 65), 66);
+});
+test('pinUnpriced: a pinned model not in pricedModels; never when nothing is pinned', () => {
+  assert.equal(pinUnpriced('', SETUP_INFO.pricedModels), false);
+  assert.equal(pinUnpriced('   ', SETUP_INFO.pricedModels), false);
+  assert.equal(pinUnpriced(' model-a-fast ', SETUP_INFO.pricedModels), false);
+  assert.equal(pinUnpriced('model-x', SETUP_INFO.pricedModels), true);
 });
