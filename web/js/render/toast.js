@@ -5,12 +5,17 @@ import { R, kbd } from './util.js';
 
 let toastEl = null; let toastTimer = null; let toastGone = null;
 
-/* opts.undo adds the prototype's Undo button (data-act="undo"). */
+/* A toast's HTML. opts.undo adds the prototype's Undo button
+   (data-act="undo"). */
+export function toastHtml(title, body, opts) {
+  return '<div><b>' + esc(title) + '</b>' + (body ? '<span>' + esc(body) + '</span>' : '') + '</div>' +
+    (opts && opts.undo ? '<button class="wb-toast-btn" data-act="undo">Undo ' + kbd('U') + '</button>' : '');
+}
+
 export function toast(title, body, opts) {
   const host = R('toasts');
   if (!host) return;
-  const html = '<div><b>' + esc(title) + '</b>' + (body ? '<span>' + esc(body) + '</span>' : '') + '</div>' +
-    (opts && opts.undo ? '<button class="wb-toast-btn" data-act="undo">Undo ' + kbd('U') + '</button>' : '');
+  const html = toastHtml(title, body, opts);
   clearTimeout(toastTimer); clearTimeout(toastGone);
   if (toastEl && toastEl.isConnected && !toastEl.classList.contains('is-leaving')) {
     toastEl.innerHTML = html;

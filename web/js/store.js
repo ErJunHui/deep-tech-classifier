@@ -27,9 +27,6 @@ export const S = {
   landed: {}, // {index: Date.now()} when a row's result arrived, for the wb-land animation
 };
 
-/* The key of a row's decision form draft in S.forms. */
-export const formKey = (runId, index) => runId + ':' + index;
-
 /* Stopped, interrupted and failed runs resume; so does a complete run with
    error rows (they are retried). */
 export function resumable(run) {

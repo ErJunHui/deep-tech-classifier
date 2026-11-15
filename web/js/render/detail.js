@@ -4,8 +4,8 @@
    and result fields from row.result. A row whose classification ended in an
    error shows what went wrong and has no decision controls. main.js
    registers renderDetail with state.js (setDetailRenderer). */
-import { esc, money, signed, flip, vLow, actionFor, confWord, hhmm, rowView, formProblem, needsNote } from '../model.js';
-import { S, formKey } from '../store.js';
+import { esc, money, signed, flip, vLow, actionFor, confWord, hhmm, rowView, formProblem, needsNote, formKey } from '../model.js';
+import { S } from '../store.js';
 import { R, put, kbd, MOD, CRIT, verdictHtml, errorVerdictHtml, riskHtml } from './util.js';
 
 const BASIS = { COMBINED: 'Input and web descriptions', WEB_DESCRIPTION: 'Web description', DESCRIPTION_ONLY: 'Input description only' };
@@ -290,9 +290,11 @@ function pendingDetail(run, v) {
     inputHtml(v.row) + '</div></div>';
 }
 
-/* A row whose classification ended in an error: no decision controls. */
+/* A row whose classification ended in an error: what went wrong and its
+   input description, no decision controls. */
 function errorHtml(v) {
   return '<div class="wb-doc"><div class="wb-doc-main"><div class="wb-flag"><div class="wb-flag-t">Error: this company was not classified</div>' +
-    (v.r.errorMessage ? '<p>' + esc(v.r.errorMessage) + '</p>' : '') + '<p>Resume the run to retry it.</p></div>' +
-    inputHtml(v.row) + '</div></div>';
+    (v.r.errorMessage ? '<p>' + esc(v.r.errorMessage) + '</p>' : '') +
+    (v.row.description ? '<p><b>From the input file:</b> ' + esc(v.row.description) + '</p>' : '') +
+    '<p>Resume the run to retry it.</p></div></div></div>';
 }

@@ -4,7 +4,8 @@ import {
   esc, clamp, pad, money, fmtDur, confWord, signed, flip, vLabel, vLow, actionFor, hhmm, dateLabel,
   currentDecision, rowView, counts, newFilters, anyFilter, computeIds,
   formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
-  pushUndo, popUndo,
+  pushUndo, popUndo, decisionVerdict, editChoice, changeChoice, recordToast, restoreToast, undoToast,
+  decisionErrorPlace, undoFailureKeeps, busyNotice,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -506,4 +507,66 @@ test('pushUndo and popUndo: last in, first out, without changing the stack given
 });
 test('popUndo on an empty stack returns null', () => {
   assert.equal(popUndo([]), null);
+});
+
+/* ---------- decision flow ---------- */
+const NAME = 'A<b>&"Co';
+const oddRow = (res, history = []) => row(0, res, history, { name: NAME });
+test('decisionVerdict: confirm sends the pipeline verdict, change the other one', () => {
+  const v = rowView(oddRow(result({ verdict: 'deep tech' })));
+  assert.equal(decisionVerdict(v, 'confirm'), 'deep tech');
+  assert.equal(decisionVerdict(v, 'change'), 'general tech');
+});
+test('editChoice: Change decision on a reclassified row reopens "change", which keeps the reviewer verdict', () => {
+  const v = rowView(oddRow(result({ verdict: 'deep tech' }), [entry('change', 'general tech', 'why')]));
+  assert.equal(editChoice(v), 'change');
+  assert.equal(decisionVerdict(v, editChoice(v)), 'general tech');
+  const c = rowView(oddRow(result({ verdict: 'deep tech', risk: 'Escalate' }), [entry('confirm', 'deep tech')]));
+  assert.equal(editChoice(c), 'confirm');
+  assert.equal(editChoice(rowView(oddRow(result()))), '');
+});
+test('changeChoice: X picks the verdict the row does not have now', () => {
+  assert.equal(changeChoice(rowView(oddRow(result({ verdict: 'deep tech' })))), 'change');
+  assert.equal(changeChoice(rowView(oddRow(result({ verdict: 'deep tech' }), [entry('change', 'general tech', 'n')]))), 'confirm');
+});
+test('recordToast: confirm, change with a note, change without one; the name is raw text', () => {
+  const flagged = rowView(oddRow(result({ verdict: 'deep tech', risk: 'Escalate' })));
+  assert.deepEqual(recordToast(flagged, 'confirm', '', 1), { title: 'Confirmed A<b>&"Co as deep tech', body: 'Approve · 1 undoable' });
+  assert.deepEqual(recordToast(flagged, 'change', 'because', 2), { title: 'Changed A<b>&"Co to general tech', body: 'Reject · note saved · 2 undoable' });
+  assert.deepEqual(recordToast(flagged, 'change', '', 3), { title: 'Changed A<b>&"Co to general tech', body: 'Reject · 3 undoable' });
+  const re = rowView(oddRow(result({ verdict: 'deep tech' }), [entry('change', 'general tech', 'n')]));
+  assert.equal(recordToast(re, 'confirm', '', 1).title, 'Changed A<b>&"Co to deep tech', 'back to the pipeline verdict is a change from the current one');
+});
+test('restoreToast: label, title and body; flagged rows go back to review', () => {
+  const flagged = rowView(oddRow(result({ risk: 'Contested' }), [entry('confirm', 'deep tech')]));
+  assert.deepEqual(restoreToast(flagged), { label: 'Restored A<b>&"Co', title: 'Restored pipeline verdict for A<b>&"Co', body: 'Back to Needs Review' });
+  const clear = rowView(oddRow(result({ verdict: 'general tech' }), [entry('change', 'deep tech', 'n')]));
+  assert.equal(restoreToast(clear).body, 'Reject');
+});
+test('undoToast: what was undone and how many more can be', () => {
+  assert.deepEqual(undoToast('Restored A<b>&"Co', 0), { title: 'Undone: Restored A<b>&"Co', body: '' });
+  assert.deepEqual(undoToast('x', 1), { title: 'Undone: x', body: '1 more action can be undone' });
+  assert.deepEqual(undoToast('x', 2), { title: 'Undone: x', body: '2 more actions can be undone' });
+});
+test('decisionErrorPlace: the open form of that row in the open run, else a toast', () => {
+  const base = { forms: { 'r:3': { open: true, choice: 'change', note: '' } }, runId: 'r', index: 3, activeRunId: 'r', selected: 3 };
+  assert.equal(decisionErrorPlace(base), 'form');
+  assert.equal(decisionErrorPlace(Object.assign({}, base, { selected: 4 })), 'toast');
+  assert.equal(decisionErrorPlace(Object.assign({}, base, { activeRunId: 'other' })), 'toast');
+  assert.equal(decisionErrorPlace(Object.assign({}, base, { forms: {} })), 'toast');
+  assert.equal(decisionErrorPlace(Object.assign({}, base, { forms: { 'r:3': { open: false, choice: '', note: '' } } })), 'toast');
+});
+test('undoFailureKeeps: a 4xx answer drops the entry; a network error or 5xx keeps it', () => {
+  const err = (status) => Object.assign(new Error('x'), { status });
+  assert.equal(undoFailureKeeps(err(409)), false);
+  assert.equal(undoFailureKeeps(err(404)), false);
+  assert.equal(undoFailureKeeps(err(400)), false);
+  assert.equal(undoFailureKeeps(err(500)), true);
+  assert.equal(undoFailureKeeps(err(503)), true);
+  assert.equal(undoFailureKeeps(new Error('Could not reach the server.')), true);
+});
+test('busyNotice: from 300 ms into the request, once', () => {
+  assert.equal(busyNotice(1000, 1299, false), false);
+  assert.equal(busyNotice(1000, 1300, false), true);
+  assert.equal(busyNotice(1000, 5000, true), false);
 });

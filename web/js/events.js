@@ -5,9 +5,9 @@
    evidence panel's sections and the reviewer's decisions. Other actions
    (new-run, rerun, download, help, palette, reading view) are bound
    elsewhere; until then their buttons do nothing. */
-import { S, openRun, refreshView, renderDetail, stopActive, resumeActive, resumable, record, restore, undo } from './state.js';
-import { clamp, flip, newFilters, rowView, formProblem, ROW_WINDOW } from './model.js';
-import { formKey } from './store.js';
+import { S, openRun, refreshView, renderDetail, stopActive, resumeActive, resumable } from './state.js';
+import { record, restore, undo } from './decisions.js';
+import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, ROW_WINDOW } from './model.js';
 import { R } from './render/util.js';
 import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
@@ -124,7 +124,7 @@ async function keyConfirm() {
 /* X: the form, set to the verdict the row does not have now. */
 function keyChange() {
   const v = selectedView(); if (!decidable(v)) return;
-  openForm(flip(v.verdict) === v.r.verdict ? 'confirm' : 'change', true);
+  openForm(changeChoice(v), true);
 }
 /* M: the form with the note focused. */
 function focusNote() {
@@ -195,7 +195,7 @@ function onClick(e) {
     case 'quick-confirm': keyConfirm(); break;
     case 'open-change': keyChange(); break;
     case 'open-note': focusNote(); break;
-    case 'change-dec': { const v = selectedView(); if (decidable(v) && v.dec) openForm(v.dec.type, true); break; }
+    case 'change-dec': { const v = selectedView(); if (decidable(v) && v.dec) openForm(editChoice(v), true); break; }
     case 'restore': if (decidable(selectedView())) restore(S.selected); break;
     case 'record': recordFromForm(); break;
     case 'cancel-form': if (S.active && S.selected != null) delete S.forms[selectedKey()]; renderDetail(); break;

@@ -56,6 +56,55 @@ export function popUndo(stack) {
   return { entry: stack[stack.length - 1], stack: stack.slice(0, -1) };
 }
 
+/* ---------- decision flow ----------
+   The pure parts of record, restore and undo (decisions.js). view is a
+   rowView with a (non-error) result. Toast texts are raw: toast.js escapes
+   its arguments. */
+
+/* The key of a row's decision form draft in S.forms. */
+export const formKey = (runId, index) => runId + ':' + index;
+/* The verdict a choice records: 'confirm' the pipeline's, 'change' the other. */
+export const decisionVerdict = (view, choice) => (choice === 'confirm' ? view.r.verdict : flip(view.r.verdict));
+/* The form choice "Change decision" reopens: the current decision's own, so
+   recording it again keeps the reviewer's verdict; '' without a decision. */
+export const editChoice = (view) => (view.dec ? view.dec.type : '');
+/* The form choice X opens: the verdict the row does not have now. */
+export const changeChoice = (view) => (flip(view.verdict) === view.r.verdict ? 'confirm' : 'change');
+
+/* {title, body} of the toast after recording choice with note; the title is
+   also the undo label. undoCount: the undo stack's size after the push. */
+export function recordToast(view, choice, note, undoCount) {
+  const verdict = decisionVerdict(view, choice);
+  const name = view.row.name;
+  const title = verdict !== view.verdict ? 'Changed ' + name + ' to ' + vLow(verdict) : 'Confirmed ' + name + ' as ' + vLow(verdict);
+  return { title, body: actionFor(verdict) + (note ? ' · note saved' : '') + ' · ' + undoCount + ' undoable' };
+}
+/* {label, title, body} after restoring the pipeline's verdict. */
+export function restoreToast(view) {
+  const name = view.row.name;
+  return { label: 'Restored ' + name, title: 'Restored pipeline verdict for ' + name, body: view.flagged ? 'Back to Needs Review' : actionFor(view.r.verdict) };
+}
+/* {title, body} after undoing label; remaining: entries left on the stack. */
+export function undoToast(label, remaining) {
+  return { title: 'Undone: ' + label, body: remaining ? remaining + ' more action' + (remaining === 1 ? '' : 's') + ' can be undone' : '' };
+}
+
+/* Where a failed decision's message goes: 'form' (the hint of the open form)
+   when the row's form is open and on screen (its run open, the row
+   selected), else 'toast'. */
+export function decisionErrorPlace({ forms, runId, index, activeRunId, selected }) {
+  const form = forms[formKey(runId, index)];
+  return form && form.open && activeRunId === runId && selected === index ? 'form' : 'toast';
+}
+/* Whether a failed undo goes back on the stack: not when the server refused
+   it (HTTP 4xx: nothing to undo, no such row or run); yes on a network error
+   or a server failure, so U can try again. error: from api.js. */
+export const undoFailureKeeps = (error) => !(error.status >= 400 && error.status < 500);
+/* A decision request this long in flight gets "Still saving the last
+   decision" when another action arrives. */
+export const BUSY_NOTICE_MS = 300;
+export const busyNotice = (startedAt, now, alreadyShown) => !alreadyShown && now - startedAt >= BUSY_NOTICE_MS;
+
 /* ---------- rows ---------- */
 const SEV = Object.freeze({ Escalate: 0, Contested: 1, Uncertain: 2, Clear: 3 });
 /* Where an error row sits on the risk scale when sorting: after the flagged

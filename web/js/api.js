@@ -1,7 +1,8 @@
 /* The HTTP API (webapp/app.py), one function per route. Each resolves with
    the parsed JSON and rejects with Error(detail) on a non-2xx response, using
-   the server's {"detail": "..."} text, or with a readable message when the
-   server cannot be reached. */
+   the server's {"detail": "..."} text and carrying the HTTP status as
+   error.status, or with a readable message (and no status) when the server
+   cannot be reached. */
 
 async function call(method, url, body) {
   const opts = { method, headers: { Accept: 'application/json' } };
@@ -18,7 +19,7 @@ async function call(method, url, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
-  if (!res.ok) throw new Error(detailText(data, res.status));
+  if (!res.ok) throw Object.assign(new Error(detailText(data, res.status)), { status: res.status });
   return data;
 }
 

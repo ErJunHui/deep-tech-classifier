@@ -143,3 +143,31 @@ test('rowHtml: an error row shows its real cost when it is a number, else —, n
     S.active = null;
   }
 });
+
+/* ---------- API errors carry the HTTP status ---------- */
+test('api: a non-2xx answer rejects with the server detail and its status; a network failure has none', async () => {
+  const api = await import('../js/api.js');
+  const real = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({ detail: 'This row has nothing to undo.' }), { status: 409 });
+    await assert.rejects(api.undoDecision('r', 0), (e) => e.message === 'This row has nothing to undo.' && e.status === 409);
+    globalThis.fetch = async () => { throw new TypeError('Failed to fetch'); };
+    await assert.rejects(api.undoDecision('r', 0), (e) => e.message === 'Could not reach the server.' && e.status === undefined);
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+/* ---------- toast text ---------- */
+test('toastHtml escapes the title and body once: decision toasts pass raw text', async () => {
+  const { toastHtml } = await import('../js/render/toast.js');
+  const { recordToast, rowView } = await import('../js/model.js');
+  const v = rowView({ index: 0, name: 'A<b>&"Co', uen: '', domain: '', description: '', step: null, history: [],
+    result: { error: false, verdict: 'deep tech', risk: 'Escalate', conf: 58 } });
+  const t = recordToast(v, 'confirm', '', 1);
+  const html = toastHtml(t.title, t.body, { undo: true });
+  assert.match(html, /<b>Confirmed A&lt;b&gt;&amp;&quot;Co as deep tech<\/b>/);
+  assert.doesNotMatch(html, /&amp;lt;|A<b>&/);
+  assert.match(html, /<span>Approve · 1 undoable<\/span>/);
+  assert.match(html, /data-act="undo"/);
+});
