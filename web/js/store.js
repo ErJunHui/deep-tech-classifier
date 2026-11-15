@@ -20,12 +20,15 @@ export const S = {
   draft: null, // the new run being set up
   analyst: false, // the analyst-settings sheet is open
   modal: null,
-  forms: {},
+  forms: {}, // {formKey: {open, choice, note}}: decision form drafts
   collapsed: { facts: true },
   reading: false, detailW: null, filtersOpen: false,
   sessionRunIds: new Set(), // runs created in this browser session
   landed: {}, // {index: Date.now()} when a row's result arrived, for the wb-land animation
 };
+
+/* The key of a row's decision form draft in S.forms. */
+export const formKey = (runId, index) => runId + ':' + index;
 
 /* Stopped, interrupted and failed runs resume; so does a complete run with
    error rows (they are retried). */

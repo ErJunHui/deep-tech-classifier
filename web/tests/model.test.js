@@ -4,6 +4,7 @@ import {
   esc, clamp, pad, money, fmtDur, confWord, signed, flip, vLabel, vLow, actionFor, hhmm, dateLabel,
   currentDecision, rowView, counts, newFilters, anyFilter, computeIds,
   formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
+  pushUndo, popUndo,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -483,4 +484,26 @@ test('mergeChanges: a retried error row that lands again counts as landed', () =
   const out = mergeChanges(active, { run: {}, steps: {}, rows: [row(0, result())], cursor: 2 });
   assert.deepEqual(out.landed, [0]);
   assert.equal(out.active.rows[0].result.error, false);
+});
+
+/* ---------- undo stack ---------- */
+test('pushUndo and popUndo: last in, first out, without changing the stack given', () => {
+  const a = { runId: 'run_a', index: 3, label: 'Confirmed A as deep tech' };
+  const b = { runId: 'run_b', index: 0, label: 'Restored B' };
+  const empty = [];
+  const one = pushUndo(empty, a);
+  const two = pushUndo(one, b);
+  assert.deepEqual(empty, []);
+  assert.deepEqual(one, [a]);
+  assert.deepEqual(two, [a, b]);
+  const first = popUndo(two);
+  assert.equal(first.entry, b);
+  assert.deepEqual(first.stack, [a]);
+  assert.deepEqual(two, [a, b], 'the stack given is not changed');
+  const second = popUndo(first.stack);
+  assert.equal(second.entry, a);
+  assert.deepEqual(second.stack, []);
+});
+test('popUndo on an empty stack returns null', () => {
+  assert.equal(popUndo([]), null);
 });

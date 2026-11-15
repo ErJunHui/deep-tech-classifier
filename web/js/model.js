@@ -46,6 +46,16 @@ export function currentDecision(history) {
   return last.type === 'restore' ? null : last;
 }
 
+/* The reviewer's undo stack: entries {runId, index, label}, the newest last.
+   Neither function changes the stack it is given. */
+export const pushUndo = (stack, entry) => stack.concat([entry]);
+/* {entry, stack}: the newest entry and the stack without it; null when the
+   stack is empty. */
+export function popUndo(stack) {
+  if (!stack.length) return null;
+  return { entry: stack[stack.length - 1], stack: stack.slice(0, -1) };
+}
+
 /* ---------- rows ---------- */
 const SEV = Object.freeze({ Escalate: 0, Contested: 1, Uncertain: 2, Clear: 3 });
 /* Where an error row sits on the risk scale when sorting: after the flagged

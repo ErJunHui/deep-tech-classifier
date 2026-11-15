@@ -1,16 +1,18 @@
-/* The open run, polling, and the render pass over all regions. Ported from
-   the prototype's openRun, refreshView, stopRun/resumeRun and onTick, with
-   the simulation replaced by the API. The state object S lives in store.js
+/* The open run, polling, the reviewer's decisions and the render pass over
+   all regions. Ported from the prototype's openRun, refreshView,
+   stopRun/resumeRun, record/restore/undo and onTick, with the simulation
+   replaced by the API. The state object S lives in store.js
    and is re-exported here. */
 import * as api from './api.js';
-import { currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW } from './model.js';
-import { S, resumable } from './store.js';
+import { currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW, rowView, flip, vLow, actionFor, pushUndo, popUndo } from './model.js';
+import { S, resumable, formKey } from './store.js';
 import { R } from './render/util.js';
 import { renderRail, renderRailFoot } from './render/rail.js';
 import { renderHead } from './render/head.js';
 import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
-import { renderTable } from './render/table.js';
+import { renderTable, rowBtn } from './render/table.js';
+import { showFormError } from './render/detail.js';
 import { toast } from './render/toast.js';
 
 const POLL_MS = 1000;
@@ -39,8 +41,8 @@ export function refreshView(explicit) {
 }
 
 /* ---------- detail panel hook ----------
-   The evidence panel (web/js/render/detail.js, a later task) registers its
-   render function here. renderDetail runs it; polling calls it only when
+   The evidence panel (web/js/render/detail.js) registers its render function
+   here (main.js). renderDetail runs it; polling calls it only when
    detailSig() changed since the last render. */
 let detailRenderer = null;
 let lastDetailSig = '';
@@ -149,6 +151,103 @@ export async function resumeActive() {
   const stop = R('head').querySelector('[data-fk="stop"]');
   if (stop) stop.focus();
   pollSoon();
+}
+
+/* ---------- decisions ----------
+   Each action calls the API and puts the row it answers with in place of the
+   open run's row, then re-renders. The table keeps its order (refreshView's
+   snapshot). One decision request at a time: actions while one is in flight
+   are ignored. undoStack holds this session's actions, newest last
+   (model.pushUndo). */
+let undoStack = [];
+let deciding = false;
+
+/* Shows a decided row of the open run: the row is replaced and every region
+   that counts decisions re-renders, the counters rolling. patch: the table
+   rows to redraw. */
+function afterDecision(a, row, patch) {
+  a.rows[row.index] = row;
+  renderRail();
+  renderStrip({ animate: true }); renderChips(); renderTable({ patch }); renderDetail();
+  pollSoon(); // the run summary's counts
+}
+
+/* An API error: in the open form's hint when the row's form is on screen,
+   else as a toast. */
+function decisionFailed(runId, index, title, e) {
+  const form = S.forms[formKey(runId, index)];
+  const shown = form && form.open && S.selected === index && S.active && S.active.run.id === runId;
+  if (!(shown && showFormError(e.message))) toast(title, e.message);
+}
+
+/* Records a decision on row index of the open run: choice 'confirm' (the
+   pipeline's verdict) or 'change' (the other one), with note. Resolves true
+   when it was recorded and the run is still open. */
+export async function record(index, choice, note) {
+  const a = S.active;
+  if (!a || deciding) return false;
+  const v = rowView(a.rows[index]);
+  if (!v.r || v.error) return false;
+  const verdict = choice === 'confirm' ? v.r.verdict : flip(v.r.verdict);
+  const name = v.row.name;
+  const what = verdict !== v.verdict ? 'Changed ' + name + ' to ' + vLow(verdict) : 'Confirmed ' + name + ' as ' + vLow(verdict);
+  deciding = true;
+  let row;
+  try { row = await api.putDecision(a.run.id, index, choice, note); } catch (e) { decisionFailed(a.run.id, index, 'Could not record the decision', e); return false; } finally { deciding = false; }
+  undoStack = pushUndo(undoStack, { runId: a.run.id, index, label: what });
+  delete S.forms[formKey(a.run.id, index)];
+  toast(what, actionFor(verdict) + (note ? ' · note saved' : '') + ' · ' + undoStack.length + ' undoable', { undo: true });
+  if (S.active !== a) { renderRail(); return false; }
+  afterDecision(a, row, [index]);
+  return true;
+}
+
+/* Goes back to the pipeline's verdict on row index of the open run. */
+export async function restore(index) {
+  const a = S.active;
+  if (!a || deciding) return;
+  const v = rowView(a.rows[index]);
+  if (!v.r || v.error || !v.dec) return;
+  const name = v.row.name;
+  deciding = true;
+  let row;
+  try { row = await api.restoreDecision(a.run.id, index); } catch (e) { toast('Could not restore the pipeline verdict', e.message); return; } finally { deciding = false; }
+  undoStack = pushUndo(undoStack, { runId: a.run.id, index, label: 'Restored ' + name });
+  delete S.forms[formKey(a.run.id, index)];
+  toast('Restored pipeline verdict for ' + name, v.flagged ? 'Back to Needs Review' : actionFor(v.r.verdict), { undo: true });
+  if (S.active !== a) { renderRail(); return; }
+  afterDecision(a, row, [index]);
+}
+
+/* Undoes the newest action in undoStack, on whichever run it was made. The
+   row is selected when it is in the open run's view; for a run that is not
+   open only the rail is refreshed (from the next run list). A failed undo is
+   dropped from the stack. */
+export async function undo() {
+  if (deciding) return;
+  const p = popUndo(undoStack);
+  if (!p) { toast('Nothing to undo', 'Reviewer actions in this session can be undone one at a time.'); return; }
+  const u = p.entry;
+  undoStack = p.stack;
+  deciding = true;
+  let row;
+  try { row = await api.undoDecision(u.runId, u.index); } catch (e) { toast('Could not undo: ' + u.label, e.message); return; } finally { deciding = false; }
+  toast('Undone: ' + u.label, undoStack.length ? undoStack.length + ' more action' + (undoStack.length === 1 ? '' : 's') + ' can be undone' : '');
+  const a = S.active;
+  if (!a || a.run.id !== u.runId) {
+    lastList = 0; poller.soon();
+    renderRail();
+    return;
+  }
+  const prev = S.selected;
+  const at = S.viewIds.indexOf(u.index);
+  const moved = at >= 0 && prev !== u.index;
+  if (moved) {
+    S.selected = u.index;
+    if (at >= S.limit) S.limit = at + 1;
+  }
+  afterDecision(a, row, moved && prev != null ? [prev, u.index] : [u.index]);
+  if (moved) { const b = rowBtn(u.index); if (b && b.scrollIntoView) b.scrollIntoView({ block: 'nearest' }); }
 }
 
 /* ---------- polling ----------

@@ -24,7 +24,8 @@ export const MOD = /Mac|iPhone|iPad/.test((navigator.platform || '') + (navigato
 export const kbd = (...keys) => keys.map((k) => '<kbd>' + esc(k) + '</kbd>').join('');
 
 const vClass = (v) => (v === 'deep tech' ? 'is-deep' : 'is-gen');
-const CRIT = [['innovation', 'I', 'Innovation'], ['scientific_foundation', 'S', 'Scientific foundation'], ['proprietary_ip', 'P', 'Proprietary IP']];
+/* The three criteria: [result.criteria key, mark letter, label]. */
+export const CRIT = [['innovation', 'I', 'Innovation'], ['scientific_foundation', 'S', 'Scientific foundation'], ['proprietary_ip', 'P', 'Proprietary IP']];
 
 export const verdictHtml = (v) => '<span class="wb-verdict ' + vClass(v) + '" title="' + vLabel(v) + '"><span class="wb-vtxt">' + vLabel(v) + '</span></span>';
 /* The verdict cell of a row whose classification ended in an error. */
