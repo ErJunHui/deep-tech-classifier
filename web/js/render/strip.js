@@ -15,15 +15,16 @@ export function renderStrip(opts) {
   const k = counts(rows);
   const f = S.f;
   const L = (long, short) => '<span class="wb-l-long">' + long + '</span><span class="wb-l-short">' + short + '</span>';
-  const stat = (key, label, value, cls, pressed, sub, extra) => {
-    const inner = '<span class="wb-stat-l">' + label + '</span><span class="wb-stat-v ' + (cls || '') + '">' + value + '</span>' + (sub ? '<span class="wb-stat-s">' + sub + '</span>' : '');
+  /* subCls: an extra class for the sub-line. */
+  const stat = (key, label, value, cls, pressed, sub, extra, subCls) => {
+    const inner = '<span class="wb-stat-l">' + label + '</span><span class="wb-stat-v ' + (cls || '') + '">' + value + '</span>' + (sub ? '<span class="wb-stat-s' + (subCls ? ' ' + subCls : '') + '">' + sub + '</span>' : '');
     return key ? '<button class="wb-stat" data-act="stat" data-k="' + key + '" data-fk="stat-' + key + '" aria-pressed="' + !!pressed + '">' + inner + '</button>' : '<div class="wb-stat' + (extra ? ' is-extra' : '') + '">' + inner + '</div>';
   };
   const sub = [];
   if (k.confirmed) sub.push(k.confirmed + ' reviewed');
   if (k.reclassified) sub.push(k.reclassified + ' reclassified');
   const errSub = k.errors ? k.errors + (k.errors === 1 ? ' error' : ' errors') + ' · retried on resume' : '';
-  let html = stat(null, L('Processed', 'Done'), counterHtml('done', k.done) + '<small>/' + k.total + '</small>', '', false, errSub) +
+  let html = stat(null, L('Processed', 'Done'), counterHtml('done', k.done) + '<small>/' + k.total + '</small>', '', false, errSub, false, 'is-wrap') +
     '<span class="wb-strip-sep"></span>' +
     stat('deep', L('Deep tech', 'Deep'), counterHtml('deep', k.deep), 'is-deep', f.verdict.size === 1 && f.verdict.has('deep tech')) +
     stat('general', L('General tech', 'General'), counterHtml('general', k.general), '', f.verdict.size === 1 && f.verdict.has('general tech')) +
