@@ -31,7 +31,7 @@ The prototype simulates things the real app has to do differently. These are dec
 1. **No "summary" runs.** The prototype's `kind: 'summary'` runs ("rows were not kept in this workspace", `archiveHtml`, `runDetailHtml`, `buildSummaryOps`) are not built. Every run the app lists has its rows. Runs started from the CLI are not listed.
 2. **"Use sample file" becomes "Choose file…".** The drop zone uploads the real file; the button opens a file picker.
 3. **Two statuses the prototype lacks.** `interrupted` (the server restarted or the pipeline process died while running) behaves like `stopped`. `failed` (the pipeline exited with a fatal error such as a bad key or a resume mismatch) shows the status pill "Failed", the pipeline's `[FATAL]` message in the `wb-notice` block, and a Resume button.
-4. **Error rows.** A company whose `classification` is `error` shows "Error" in the verdict cell, `—` for confidence, criteria and risk, action "Needs Review", and cannot be decided. It is counted in a new `errors` count (shown as a sub-line under "Processed": `N errors · retried on resume`), not in deep/general. Resume is offered on a complete run that has error rows.
+4. **Error rows.** A company whose `classification` is `error` shows "Error" in the verdict cell, `—` for confidence, criteria and risk, action "Needs Review", and cannot be decided. Its patents and cost cells show the real value when the result has one, otherwise `—`. It is counted in a new `errors` count (shown as a sub-line under "Processed": `N errors · retried on resume`), not in deep/general. Resume is offered on a complete run that has error rows.
 
 ## Review Focus
 
