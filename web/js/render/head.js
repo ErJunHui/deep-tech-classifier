@@ -2,7 +2,7 @@
    the progress line or notice. Ported from the prototype's renderHead, plus
    the Failed and Interrupted pills and their notices. */
 import { esc, counts, dateLabel } from '../model.js';
-import { S, resumable } from '../store.js';
+import { S, resumable, setupShown } from '../store.js';
 import { R, kbd } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
 
@@ -27,7 +27,7 @@ function cfgTags(cfg, batch) {
 
 /* opts.animate: the counters roll to their new values (polling, decisions). */
 export function renderHead(opts) {
-  if (S.draft) return; // the setup head (render/setup.js)
+  if (setupShown()) return; // the setup head (render/setup.js)
   const el = R('head');
   el.hidden = !S.active;
   if (!S.active) { el.innerHTML = ''; return; }

@@ -7,9 +7,10 @@
    analyst sheet, Start). Other actions (download, help, palette, reading
    view) are bound elsewhere; until then their buttons do nothing. */
 import {
-  S, openRun, refreshView, renderDetail, stopActive, resumeActive, resumable,
-  openSetup, cancelSetup, setupChanged, loadFile, clearFile, startRun,
+  S, refreshView, renderDetail, stopActive, resumeActive, resumable,
+  openSetup, cancelSetup, showRun, setupChanged, loadFile, clearFile, startRun,
 } from './state.js';
+import { setupShown } from './store.js';
 import { record, restore, undo } from './decisions.js';
 import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW } from './model.js';
 import { R } from './render/util.js';
@@ -101,8 +102,8 @@ function selectedView() {
   const row = S.active.rows[S.selected];
   return row ? rowView(row) : null;
 }
-/* Never while a new run is set up: the open run is not on screen. */
-const decidable = (v) => !S.draft && !!(v && v.r && !v.error);
+/* Never while a new run's setup is shown: the open run is not on screen. */
+const decidable = (v) => !setupShown() && !!(v && v.r && !v.error);
 const selectedKey = () => formKey(S.active.run.id, S.selected);
 
 /* Opens the selected row's decision form with choice (null keeps the
@@ -157,7 +158,7 @@ function leaveNote() {
 /* The column menu's choice: field reads column col ('' for none). */
 function setMapping(col) {
   const field = mapField();
-  if (!field || !S.draft) return;
+  if (!field || !setupShown()) return;
   S.draft.cfg.mapping[field] = col;
   closePop(false);
   setupChanged({ table: true });
@@ -168,7 +169,7 @@ function setMapping(col) {
 /* A row checkbox (index i) or the header checkbox (i null) changed to on. */
 function tick(i, on) {
   const dr = S.draft;
-  if (!dr || !dr.file) return;
+  if (!setupShown() || !dr.file) return;
   if (i == null) {
     if (on) dr.excluded.clear();
     else dr.file.table.forEach((cells, j) => dr.excluded.add(j));
@@ -177,7 +178,7 @@ function tick(i, on) {
   setupChanged({ table: true });
 }
 function resetThresholds() {
-  if (!S.draft) return;
+  if (!setupShown()) return;
   THRESHOLD_KEYS.forEach((k) => { S.draft.cfg[k] = S.setup.defaults[k]; });
   setupChanged();
 }
@@ -209,7 +210,7 @@ function onClick(e) {
   if (!a || !root().contains(a)) return;
   switch (a.getAttribute('data-act')) {
     case 'select': select(+a.getAttribute('data-id'), { focus: true }); break;
-    case 'open-run': cancelSetup(false); openRun(a.getAttribute('data-id')); break;
+    case 'open-run': showRun(a.getAttribute('data-id')); break;
     case 'stop': stopActive(); break;
     case 'resume': resumeActive(); break;
     case 'sort': {
@@ -241,10 +242,10 @@ function onClick(e) {
     }
     case 'filters-toggle': S.filtersOpen = !S.filtersOpen; renderChips(); break;
     case 'show-more':
-      if (S.draft) { S.draft.limit += ROW_WINDOW; renderSetupTable(); } else { S.limit += ROW_WINDOW; renderTable(); }
+      if (setupShown()) { S.draft.limit += ROW_WINDOW; renderSetupTable(); } else { S.limit += ROW_WINDOW; renderTable(); }
       break;
     case 'show-all':
-      if (S.draft) { S.draft.limit = S.draft.file.table.length; renderSetupTable(); } else { S.limit = S.viewIds.length; renderTable(); }
+      if (setupShown()) { S.draft.limit = S.draft.file.table.length; renderSetupTable(); } else { S.limit = S.viewIds.length; renderTable(); }
       break;
     case 'toggle-sec': {
       const k = a.getAttribute('data-k');
@@ -292,13 +293,13 @@ function onInput(e) {
     syncForm();
     return;
   }
-  if (S.draft) setSetting(t, true);
+  if (setupShown()) setSetting(t, true);
 }
 
 function onChange(e) {
   const t = e.target;
   if (t === R('file')) { loadFile(t.files && t.files[0]); return; }
-  if (S.draft) {
+  if (setupShown()) {
     const act = t.getAttribute('data-act');
     if (act === 'tick-all') tick(null, t.checked);
     else if (act === 'tick-row') tick(+t.getAttribute('data-i'), t.checked);
@@ -345,7 +346,7 @@ function onRootKey(e) {
   const fk = t.getAttribute ? t.getAttribute('data-fk') : null;
   if (S.analyst && R('overlay').contains(t)) { sheetKey(e); return; }
   if (popKind() && R('pop').contains(t)) { popKey(e); return; }
-  if (S.draft) {
+  if (setupShown()) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setupEscape(); }
     return;
   }
@@ -374,7 +375,7 @@ function onDocKey(e) {
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (S.draft) {
+  if (setupShown()) {
     // Setting up a new run: only these keys; the rest act on a run.
     if (e.key === 'Escape') setupEscape();
     else if (e.key === 'o' || e.key === 'O') openSetup(null);
@@ -413,7 +414,7 @@ function onResize() { if (popKind()) closePop(false); }
 /* Drag and drop: while setting up, the whole main column takes a spreadsheet. */
 let dragDepth = 0;
 const isFileDrag = (e) => !!(e.dataTransfer && [...(e.dataTransfer.types || [])].indexOf('Files') >= 0);
-const dropOk = (e) => !!S.draft && !S.analyst && R('main').contains(e.target);
+const dropOk = (e) => setupShown() && !S.analyst && R('main').contains(e.target);
 function onDragEnter(e) {
   if (!isFileDrag(e)) return;
   e.preventDefault();

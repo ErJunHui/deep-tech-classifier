@@ -3,7 +3,7 @@
    API error text and the error row's cost cell. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { S, resumable, tableNotice } from '../js/store.js';
+import { S, resumable, tableNotice, setupShown } from '../js/store.js';
 import { createPoller } from '../js/state.js';
 import { fmtCounter } from '../js/render/counter.js';
 import { detailText } from '../js/api.js';
@@ -22,6 +22,16 @@ test('state.js re-exports the same S and resumable', async () => {
   const state = await import('../js/state.js');
   assert.equal(state.S, S);
   assert.equal(state.resumable, resumable);
+});
+
+/* ---------- new run setup on screen ---------- */
+test('setupShown: only when a draft exists and setup is on screen; a parked draft is not', () => {
+  assert.equal(S.showSetup, false);
+  assert.equal(setupShown({ draft: null, showSetup: false }), false);
+  assert.equal(setupShown({ draft: {}, showSetup: true }), true);
+  assert.equal(setupShown({ draft: {}, showSetup: false }), false); // parked in the rail
+  assert.equal(setupShown({ draft: null, showSetup: true }), false);
+  assert.equal(setupShown(), false); // defaults to S
 });
 
 /* ---------- table notice without an open run ---------- */

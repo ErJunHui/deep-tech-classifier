@@ -8,7 +8,7 @@ import {
   decisionErrorPlace, undoFailureKeeps, busyNotice,
   tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS,
+  modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -609,7 +609,7 @@ test('newDraft: a fresh draft takes copies of the defaults, no file and no rows 
   assert.ok(d.excluded instanceof Set && d.excluded.size === 0);
   assert.equal(d.fromId, null);
   assert.equal(d.limit, ROW_WINDOW);
-  assert.deepEqual([d.reading, d.error, d.est, d.startError], ['', '', null, '']);
+  assert.deepEqual([d.reading, d.error, d.est, d.estFailed, d.startError], ['', '', null, false, '']);
 });
 test('newDraft: "Same settings…" copies the run settings over the defaults, never sharing them', () => {
   const run = { id: 'run_1', settings: { provider: 'openai', tier: 'best', validatorThreshold: 50, mapping: { company_name: 'Name' } } };
@@ -674,6 +674,15 @@ test('classifyLabel: count, cost and duration; unknown cost; nothing estimated y
   assert.equal(classifyLabel(1, { known: false, cost: null, secs: 18 }), 'Classify 1 company · cost unknown · about 18 s');
   assert.equal(classifyLabel(5, null), 'Classify 5 companies');
   assert.equal(classifyLabel(2000, { known: true, cost: 12, secs: 5400 }), 'Classify 2,000 companies · ~US$12.00 · about 1 h 30 min');
+});
+test('classifyLabel: a failed estimate says so instead of showing numbers', () => {
+  assert.equal(classifyLabel(18, null, true), 'Classify 18 companies · estimate unavailable');
+  assert.equal(classifyLabel(1, { known: true, cost: 1, secs: 60 }, true), 'Classify 1 company · estimate unavailable');
+});
+test('draftRailLine: the file and its ticked companies, or no file yet', () => {
+  assert.equal(draftRailLine({ file: null, cfg: { mapping: {} }, excluded: new Set() }), 'No file yet');
+  assert.equal(draftRailLine({ file: upload({ name: 'a<b>.xlsx' }), cfg: { mapping: { company_name: 'Company' } }, excluded: new Set([0]) }), 'a<b>.xlsx · 1 company');
+  assert.equal(draftRailLine({ file: upload(), cfg: { mapping: { company_name: 'Company' } }, excluded: new Set() }), 'list.xlsx · 2 companies');
 });
 test('estimateNote: a rough estimate, naming the stand-in price when there is one', () => {
   assert.equal(estimateNote({ pricedAs: null }), 'Rough estimate.');

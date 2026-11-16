@@ -2,13 +2,13 @@
    histogram. Ported from the prototype's renderStrip, plus the errors
    sub-line under Processed. */
 import { counts, rowView } from '../model.js';
-import { S } from '../store.js';
+import { S, setupShown } from '../store.js';
 import { R } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
 
 /* opts.animate: the counters roll to their new values (polling, decisions). */
 export function renderStrip(opts) {
-  if (S.draft) return; // hidden while a new run is set up
+  if (setupShown()) return; // hidden while a new run is set up
   const el = R('strip');
   el.hidden = !S.active;
   if (!S.active) { el.innerHTML = ''; return; }

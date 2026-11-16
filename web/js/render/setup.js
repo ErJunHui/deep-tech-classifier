@@ -5,13 +5,15 @@
    renderSetupBar, openMap, settingsPopHtml and closePop. Reads S.draft (the
    draft run, model.newDraft) and S.setup (GET /api/setup); the actions that
    call the API (upload, estimate, start) are in state.js. Only a window of
-   the file's rows is rendered, with the results table's footer. */
+   the file's rows is rendered, with the results table's footer. Every
+   render does nothing while the draft is parked (store.setupShown false),
+   so an answer for it never paints over the run on screen. */
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, skippedCount, startProblem,
-  classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
+  classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, visibleRows,
 } from '../model.js';
-import { S } from '../store.js';
+import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
 import { moreHtml } from './table.js';
 
@@ -69,7 +71,8 @@ export function setSetupChrome(on) {
 
 /* Focus where setup starts: Start when a file is loaded, else Choose file. */
 export function focusSetupStart() {
-  const b = root().querySelector(S.draft && S.draft.file ? '[data-fk="start"]' : '[data-fk="pick-file"]');
+  if (!setupShown()) return;
+  const b = root().querySelector(S.draft.file ? '[data-fk="start"]' : '[data-fk="pick-file"]');
   if (b) b.focus();
 }
 
@@ -95,6 +98,7 @@ function headHtml() {
   return h + (notes.length ? '<div class="wb-snotes">' + notes.join('') + '</div>' : '');
 }
 export function renderSetupHead() {
+  if (!setupShown()) return;
   const el = R('head');
   el.hidden = false;
   put(el, headHtml());
@@ -148,6 +152,7 @@ function rowHtml(i, cells, cols, enter) {
 
 /* opts.enter: the rows fade in, and the table starts at the top. */
 export function renderSetupTable(opts) {
+  if (!setupShown()) return;
   const dr = S.draft; const f = dr.file;
   const wrap = R('table');
   const state = f ? tickAllState(f.table.length, dr.excluded) : 'all';
@@ -177,19 +182,20 @@ export function renderSetupTable(opts) {
 
 /* ---------- action bar ---------- */
 export function renderSetupBar() {
+  if (!setupShown()) return;
   const dr = S.draft; const d = dr.cfg;
   const e = dr.est;
   const prob = startProblem(dr, S.setup);
   const prov = draftProvider();
   const open = !!(pop && pop.kind === 'settings');
-  const label = prob ? prob.label : classifyLabel(tickedCount(dr), e);
+  const label = prob ? prob.label : classifyLabel(tickedCount(dr), e, dr.estFailed);
   const batch = e ? e.batch : !!(prov && prov.batch && d.batch);
   let note;
   if (prob) note = '<p class="wb-setbar-note is-why" id="wb-setbar-why">' + esc(prob.text) + '</p>';
   else if (dr.startError) note = '<p class="wb-setbar-note is-why" id="wb-setbar-why" role="alert">' + esc(dr.startError) + '</p>';
   else {
-    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'One company at a time; results appear as each one finishes.') +
-      (e ? (e.known ? '' : ' ' + esc(unknownCostLine(e))) + ' ' + esc(estimateNote(e)) : '') + '</p>';
+    const est = dr.estFailed ? ' ' + ESTIMATE_FAILED : e ? (e.known ? '' : ' ' + esc(unknownCostLine(e))) + ' ' + esc(estimateNote(e)) : '';
+    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'One company at a time; results appear as each one finishes.') + est + '</p>';
   }
   const why = prob || dr.startError;
   put(R('setbar'), '<div class="wb-setbar-top"><button class="wb-btn wb-btn-sm wb-set" data-act="settings-pop" data-fk="settings" aria-haspopup="dialog" aria-expanded="' + open + '">Settings: <b>' + esc(qualityName(d.tier)) + (isCustom(d, S.setup.defaults) ? ', customised' : '') + '</b> <span aria-hidden="true">▾</span></button>' +
@@ -200,6 +206,7 @@ export function renderSetupBar() {
 
 /* The head, table, bar and open popover of the draft. opts: renderSetupTable's. */
 export function renderSetup(opts) {
+  if (!setupShown()) return;
   renderSetupHead();
   R('strip').hidden = true; R('tools').hidden = true;
   renderSetupTable(opts); renderSetupBar(); renderPop();
@@ -242,7 +249,7 @@ export function openMap(field) {
   closePop(false);
   const anchor = root().querySelector('[data-fk="map-' + field + '"]');
   const dr = S.draft;
-  if (!anchor || !dr || !dr.file) return;
+  if (!anchor || !setupShown() || !dr.file) return;
   const fl = SETUP_FIELDS.find((x) => x.key === field);
   const d = dr.cfg; const f = dr.file;
   const cur = d.mapping[field] || '';
@@ -281,7 +288,7 @@ function settingsPopHtml() {
 export function openSettings() {
   closePop(false);
   const anchor = root().querySelector('[data-fk="settings"]');
-  if (!anchor || !S.draft) return;
+  if (!anchor || !setupShown()) return;
   pop = { kind: 'settings' };
   R('pop').innerHTML = '<div class="wb-pop is-set" role="dialog" aria-label="Run settings"></div>';
   renderPop();
@@ -292,6 +299,6 @@ export function openSettings() {
 }
 /* Re-renders the open settings popover (a column menu is static). */
 export function renderPop() {
-  if (!pop || pop.kind !== 'settings' || !S.draft) return;
+  if (!pop || pop.kind !== 'settings' || !setupShown()) return;
   put(R('pop').firstElementChild, settingsPopHtml());
 }

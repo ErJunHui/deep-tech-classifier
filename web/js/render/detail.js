@@ -5,7 +5,7 @@
    error shows what went wrong and has no decision controls. main.js
    registers renderDetail with state.js (setDetailRenderer). */
 import { esc, money, signed, flip, vLow, actionFor, confWord, hhmm, rowView, formProblem, needsNote, formKey } from '../model.js';
-import { S } from '../store.js';
+import { S, setupShown } from '../store.js';
 import { R, put, kbd, MOD, CRIT, verdictHtml, errorVerdictHtml, riskHtml } from './util.js';
 
 const BASIS = { COMBINED: 'Input and web descriptions', WEB_DESCRIPTION: 'Web description', DESCRIPTION_ONLY: 'Input description only' };
@@ -28,7 +28,7 @@ export function renderDetail(opts) {
   const el = R('detail');
   if (!el) return;
   const keep = el.scrollTop;
-  if (!S.active || S.draft) { put(el, ''); return; }
+  if (!S.active || setupShown()) { put(el, ''); return; }
   const row = S.selected == null ? null : S.active.rows[S.selected];
   if (!row) { put(el, '<div class="wb-d-empty">Select a row to see its evidence.<br>' + kbd('J') + ' ' + kbd('K') + ' move through the table · ' + kbd('?') + ' all shortcuts</div>'); return; }
   const run = S.active.run;

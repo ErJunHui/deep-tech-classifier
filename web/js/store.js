@@ -17,7 +17,8 @@ export const S = {
   snap: null, // {runId, dec: {index: decision}}: decisions at the last explicit view change
   limit: ROW_WINDOW, // rows the table renders (model.visibleRows)
   viewKey: '', // model.viewKey of the view the limit belongs to
-  draft: null, // the new run being set up
+  draft: null, // the new run being set up; kept (parked in the rail) while a run is looked at
+  showSetup: false, // the main column shows the draft: read it through setupShown()
   analyst: false, // the analyst-settings sheet is open
   modal: null,
   forms: {}, // {formKey: {open, choice, note}}: decision form drafts
@@ -33,6 +34,11 @@ export function resumable(run) {
   if (run.status === 'stopped' || run.status === 'interrupted' || run.status === 'failed') return true;
   return run.status === 'complete' && !!(run.counts && run.counts.errors);
 }
+
+/* Whether the main column shows the new run's setup instead of the open
+   run: a draft exists and is on screen. A draft parked in the rail (another
+   run opened) is not shown. s defaults to S. */
+export const setupShown = (s = S) => !!(s.draft && s.showSetup);
 
 /* What the table area says when no run is open, from state s (S):
    {kind: 'offline'}: the run list has not loaded (the server cannot be reached);

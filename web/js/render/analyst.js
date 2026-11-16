@@ -4,8 +4,8 @@
    sheetBodyHtml. It is a modal dialog: S.analyst is true while it is open,
    global shortcuts are off, Tab stays inside it (trapTab) and closing it
    returns focus to the control that opened it. */
-import { esc, money, fmtDur, startProblem, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
-import { S } from '../store.js';
+import { esc, money, fmtDur, startProblem, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
+import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
 import { QUALITY, draftProvider, noBatchText, closePop, openSettings } from './setup.js';
 
@@ -25,7 +25,7 @@ let closeTimer = null;
 /* from: data-fk of the control that opened it ('analyst-open', the link in
    the settings popover, or 'start'). Focus goes to the chosen provider. */
 export function openAnalyst(from) {
-  if (!S.draft) return;
+  if (!setupShown()) return;
   closePop(false);
   clearTimeout(closeTimer);
   S.analyst = true;
@@ -49,7 +49,7 @@ export function closeAnalyst(restore) {
   ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.add('is-leaving'));
   clearTimeout(closeTimer);
   closeTimer = setTimeout(() => { if (!S.analyst) ov.innerHTML = ''; }, 170);
-  if (restore === false || !S.draft) return;
+  if (restore === false || !setupShown()) return;
   if (ret === 'analyst-open') openSettings();
   const b = document.querySelector('[data-fk="' + ret + '"]') || document.querySelector('[data-fk="settings"]');
   if (b) b.focus();
@@ -79,12 +79,17 @@ function estHtml() {
       '<div class="wb-est-lg"><span><i class="wb-sw" style="background:var(--accent)"></i>Classify ' + Math.round(parts.classify / tot * 100) + '%</span><span><i class="wb-sw" style="background:var(--deep)"></i>Enrich ' + Math.round(parts.enrich / tot * 100) + '%</span><span><i class="wb-sw" style="background:var(--contested)"></i>Validate ' + Math.round(parts.validate / tot * 100) + '%</span></div>';
   } else if (e) {
     split = '<div class="wb-est-lg">' + esc(unknownCostLine(e)) + '</div>';
+  } else if (dr.estFailed) {
+    split = '<div class="wb-est-lg">' + ESTIMATE_FAILED + '</div>';
   }
+  const prov = draftProvider();
   const model = e ? e.model : modelFor(d, S.setup);
-  const batch = e ? e.batch : false;
+  const batch = e ? e.batch : !!(prov && prov.batch && d.batch);
+  // No answer: '—' when the request failed, '…' while the first is awaited.
+  const none = dr.estFailed ? '—' : '…';
   return '<div class="wb-est">' +
-    '<div><div class="wb-est-l">Est. cost' + (dr.file ? '' : ' per ' + ESTIMATE_SAMPLE + ' companies') + '</div><div class="wb-est-v">' + (e ? (e.known ? money(e.cost) : 'unknown') : '…') + '</div></div>' +
-    '<div><div class="wb-est-l">Duration</div><div class="wb-est-v">' + (e ? fmtDur(e.secs) : '…') + '</div></div>' +
+    '<div><div class="wb-est-l">Est. cost' + (dr.file ? '' : ' per ' + ESTIMATE_SAMPLE + ' companies') + '</div><div class="wb-est-v">' + (e ? (e.known ? money(e.cost) : 'unknown') : none) + '</div></div>' +
+    '<div><div class="wb-est-l">Duration</div><div class="wb-est-v">' + (e ? fmtDur(e.secs) : none) + '</div></div>' +
     '<div class="wb-est-split">' + split + '</div>' +
     (prob ? '<div class="wb-est-why">' + esc(prob.label) + '</div>' : '') +
     '<div class="wb-est-note">' + esc(model) + ' · ' + (batch ? 'batch mode halves classifier cost; a real batch job can take up to an hour' : 'one company at a time') + ' · web searches are usually the largest part of the bill</div>' +
@@ -121,11 +126,11 @@ function bodyHtml() {
 
 /* The estimate at the top of the open sheet. */
 export function renderAnalystEst() {
-  if (S.analyst && S.draft) put(R('sh-est'), estHtml());
+  if (S.analyst && setupShown()) put(R('sh-est'), estHtml());
 }
 /* The whole open sheet. */
 export function renderAnalyst() {
-  if (!S.analyst || !S.draft) return;
+  if (!S.analyst || !setupShown()) return;
   renderAnalystEst();
   put(R('sh-body'), bodyHtml());
 }

@@ -3,10 +3,10 @@
    action Needs Review) and a window: only visibleRows(S.viewIds, S.limit,
    S.selected) are rendered, followed by a "Showing 200 of 5,000" footer,
    which the setup table shares (moreHtml). Without an open run it shows why
-   (store.tableNotice). While a new run is set up (S.draft) the table area is
+   (store.tableNotice). While a new run is set up (setupShown) the table area is
    the setup table's (render/setup.js) and renderTable leaves it alone. */
 import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW } from '../model.js';
-import { S, tableNotice } from '../store.js';
+import { S, tableNotice, setupShown } from '../store.js';
 import { R, put, verdictHtml, errorVerdictHtml, riskHtml, marksHtml, revTag } from './util.js';
 
 /* "Show all" is offered up to this many rows in the view. */
@@ -107,7 +107,7 @@ const sameIds = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
    rows in the same order as last time, only those rows are replaced and the
    rest of the body is left alone; otherwise the table is rendered again. */
 export function renderTable(opts) {
-  if (S.draft) { shown = null; return; }
+  if (setupShown()) { shown = null; return; }
   const wrap = R('table');
   if (!S.active) {
     shown = null;

@@ -337,7 +337,8 @@ export const SETUP_FIELDS = Object.freeze([
    (see startProblem): fromId names the run it came from; limit is the setup
    table's row window (visibleRows); reading is the name of the file being
    uploaded and error the last upload's rejection; est is the last
-   POST /api/estimate answer and startError the last POST /api/runs
+   POST /api/estimate answer, estFailed true when the latest request for one
+   failed (est is then null), and startError the last POST /api/runs
    refusal. */
 export function newDraft(setup, fromRun) {
   const copy = (o) => JSON.parse(JSON.stringify(o || {}));
@@ -345,7 +346,7 @@ export function newDraft(setup, fromRun) {
   cfg.mapping = Object.assign({}, cfg.mapping);
   return {
     cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null, limit: ROW_WINDOW,
-    reading: '', error: '', est: null, startError: '',
+    reading: '', error: '', est: null, estFailed: false, startError: '',
   };
 }
 
@@ -389,12 +390,16 @@ export const ESTIMATE_SAMPLE = 20;
 export const estimateRows = (draft) => (draft.file ? tickedCount(draft) : ESTIMATE_SAMPLE);
 
 /* The Start button: 'Classify 18 companies · ~US$0.45 · about 2 min'. est:
-   POST /api/estimate's answer, or null before the first one. */
-export function classifyLabel(n, est) {
+   POST /api/estimate's answer, or null before the first one. failed: the
+   latest estimate request failed, so no numbers are shown. */
+export function classifyLabel(n, est, failed) {
   const head = 'Classify ' + n.toLocaleString('en-US') + ' compan' + (n === 1 ? 'y' : 'ies');
+  if (failed) return head + ' · estimate unavailable';
   if (!est) return head;
   return head + ' · ' + (est.known ? '~US$' + est.cost.toFixed(2) : 'cost unknown') + ' · about ' + fmtDur(est.secs).slice(1);
 }
+/* What the action bar and the analyst sheet say when the estimate failed. */
+export const ESTIMATE_FAILED = 'Estimate unavailable; it is tried again after the next change.';
 /* The estimate's caveat, naming the model it was priced as when that is not
    the run's model (estimate pricedAs). */
 export const estimateNote = (est) => 'Rough estimate' + (est.pricedAs ? '; priced as ' + est.pricedAs + '; the run is priced by the version the API reports' : '') + '.';
@@ -404,6 +409,13 @@ export function unknownCostLine(est) {
   return est.pinned
     ? 'Pinned model is not priced in pipeline/models.py; token totals will be reported instead.'
     : est.model + ' has no listed price; the cost is shown after the run if the API reports a priced version.';
+}
+
+/* The draft's line in the rail (text, not HTML). */
+export function draftRailLine(draft) {
+  if (!draft.file) return 'No file yet';
+  const n = tickedCount(draft);
+  return draft.file.name + ' · ' + n.toLocaleString('en-US') + (n === 1 ? ' company' : ' companies');
 }
 
 /* Headers no field reads: they are kept unchanged in the output. */
