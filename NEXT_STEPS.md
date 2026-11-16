@@ -189,3 +189,26 @@ Family-level pricing is not safe: Haiku 4.5 costs $1 / $5 per million tokens and
 | 7    | ~1 hour | Low |
 
 All seven steps are implemented. What remains is live confirmation: the unchecked items under Steps 2, 3 and 5.
+
+---
+
+## Web app: live check and open items (live check not run)
+
+The web app (`python serve.py`, see the README) is built and its tests pass, but it has not yet been run with real API calls. The live check below is Task 16, Steps 1–3, in `docs/superpowers/plans/2026-11-13-workbench-web-app.md`. It needs API keys in `.env`.
+
+Live check:
+
+- [ ] Run the real pipeline through the app. With `DTC_PIPELINE_CMD` unset, start `python serve.py`, upload `tests/reference/companies.xlsx`, and run it twice on the `fast` tier: once in batch mode and once sequentially.
+  - [ ] Both runs complete.
+  - [ ] Each company's current step appears while the run is going.
+  - [ ] Stop and Resume work partway through the sequential run.
+  - [ ] The model shown at the top of the run matches "Model Reported by API" on the downloaded workbook's Overview sheet.
+- [ ] Compare the cost estimate shown before the batch run with the run's actual cost. If they differ by more than 2×, adjust the constants in `webapp/estimate.py` from the Full Detail token columns and re-run `python -m unittest tests.test_webapp.test_estimate`.
+- [ ] Confirm the command line is unchanged: `python classify.py --input tests/reference/companies.xlsx` writes no `progress.jsonl`, and its workbook has no reviewer columns.
+
+Open items:
+
+- [ ] Task 14b in the plan (minor follow-ups to the new-run setup) has not been started.
+- [ ] The server sends the files in `web/` without a `Cache-Control` header, so after an update a browser can keep running the old JavaScript.
+
+**Done when:** both live runs complete with the checks above ticked, the estimate is within 2× of the actual cost, and the command-line check passes.

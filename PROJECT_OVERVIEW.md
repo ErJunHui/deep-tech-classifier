@@ -94,6 +94,7 @@ Output row → Excel workbook
 ```
 deep_tech_classifier/
 ├── classify.py                    # Entry point (CLI)
+├── serve.py                       # Starts the local web app
 ├── config.template.json           # Settings template — copy to config.json (not committed)
 ├── .env                           # API credentials (not in source control)
 │
@@ -118,6 +119,9 @@ deep_tech_classifier/
 │       ├── core/api_client.py
 │       ├── processors/company_processor.py
 │       └── processors/deeptech_classifier.py
+│
+├── webapp/                        # Web app server: API, run folders, launching classify.py
+├── web/                           # Web app browser code (no build step)
 │
 └── checkpoints/
     ├── run_state.json             # Current run ID (for resume)
@@ -156,6 +160,10 @@ AI providers retire models and release new ones, so the model behind a tier is n
 
 For work that must be reproducible, pin an exact model in `config.json` (see the README).
 
+### The web app
+
+The pipeline can also be run from a browser, through a local web app started with `python serve.py` (see the README). A user uploads a spreadsheet, chooses its columns and settings, and follows each company through the pipeline while it runs; each run is the same `classify.py`, started as a separate process in its own folder under `runs/`, and can be stopped and resumed. A reviewer can then confirm each verdict or change it, with a note, and download a workbook that records those decisions next to the pipeline's (see Section 6). The app is for one user on one computer: it listens only on `127.0.0.1`, API keys stay in `.env`, and the browser is told only whether each key is set. The command line works as before.
+
 ---
 
 ## 6. Output Description
@@ -192,6 +200,20 @@ All 37 output columns, including raw token counts, EPO CPC codes, validator chec
 
 ### Sheet 4 — Legend
 Explains all colour codes, confidence tiers, verdict labels, and column definitions for users unfamiliar with the pipeline.
+
+### Reviewer columns (web app downloads only)
+A workbook downloaded from the web app also records the reviewer's decisions. Workbooks written by `classify.py` do not have these columns.
+
+| Sheet | Added |
+|-------|-------|
+| Management View | **Final Verdict**, **Reviewer Decision**, **Reviewer Note**, **Reviewed At**, placed after Action Required |
+| Full Detail | `reviewer_decision`, `reviewer_verdict`, `reviewer_note`, `reviewed_at` |
+| Overview | A **Review** group: Verdicts Confirmed, Reclassified, Still Need Review |
+| Legend | Entries for Final Verdict and Reviewer Decision |
+
+- **Final Verdict** is the reviewer's verdict where a reviewer decided the row, otherwise the pipeline's Verdict. For a decided row, Action Required becomes Approve or Reject from this verdict.
+- **Reviewer Decision** is Confirmed (the reviewer kept the pipeline's verdict), Reclassified (the reviewer changed it), or empty (not yet reviewed).
+- A download taken before the run has completed holds the companies finished so far and has no Overview sheet.
 
 ---
 

@@ -115,6 +115,66 @@ The **Risk Flag** tells a reviewer where to look:
 
 **Confidence** is the likelihood that the chosen verdict is correct (0–100). The exact rules are in [PROJECT_OVERVIEW.md §7](PROJECT_OVERVIEW.md#7-confidence-scoring).
 
+## Web app
+
+The web app runs the same pipeline from a browser. You upload a spreadsheet, choose its columns and settings, start a run and follow each company through the pipeline. When results arrive you can confirm or reclassify each verdict, and download a workbook that includes those decisions.
+
+It is for one person on one computer. The server listens on `127.0.0.1` only and has no login.
+
+### Starting it
+
+Complete [Setup](#setup) first. `pip install -r requirements.txt` also installs the web server's packages, and the app reads the same `.env`. The browser part needs no build step and no Node.js.
+
+```bash
+python serve.py
+```
+
+Then open http://127.0.0.1:8765/ in a browser. `--port` serves on a different port:
+
+```bash
+python serve.py --port 9000
+```
+
+Ctrl+C stops the server. A run that is still going is stopped with it and shown as interrupted; resume it after restarting the server.
+
+API keys stay in `.env`. The browser is only told whether each key is set, and a run cannot start without the key for its provider. If `.env` is missing, `serve.py` says so and uses keys already set in the environment.
+
+The settings chosen in the browser are applied on top of `config.json`, or `config.template.json` when there is no `config.json`, and saved with the run.
+
+### Using it
+
+- **Input:** an `.xlsx`, `.xls` or `.csv` file of up to 20 MB. Untick rows to leave them out of the run (not possible for `.xls`; save it as `.xlsx` first).
+- **Stop and Resume:** Stop ends the run's process. Every finished company is kept, and Resume continues with the next unfinished one, the same as `--resume`.
+- **Review:** a verdict can be confirmed or changed to the other one, with a note. Changing a Clear verdict requires a note. Rows that ended in an error cannot be decided.
+- **Download:** the workbook holds every company with a result so far, plus the reviewer columns: Final Verdict, Reviewer Decision, Reviewer Note and Reviewed At on the Management View sheet, and `reviewer_decision`, `reviewer_verdict`, `reviewer_note` and `reviewed_at` on Full Detail. A completed run's workbook also has an Overview sheet with a Review group (confirmed, reclassified, still to review); a run that has not completed has no Overview sheet.
+
+### Where it keeps files
+
+Both folders are created in the project folder and are not committed to git. The app does not delete anything in them.
+
+| Folder | Contents |
+|---|---|
+| `uploads/` | One sub-folder per uploaded file, holding a copy of that file. |
+| `runs/<run id>/` | One folder per run, named `run_<date>_<time>`. |
+
+A run folder holds:
+
+| File or folder | Contents |
+|---|---|
+| `meta.json` | Status, settings, row count, model and times. |
+| `config.json` | The pipeline config for this run. |
+| `input/` | The run's copy of the input file, without any rows that were left out. |
+| `progress.jsonl` | Which step each company is on. |
+| `decisions.json` | The reviewer's decisions, with their history. |
+| `process.log` | The pipeline's console output. |
+| `checkpoints/`, `logs/`, `output/` | What `classify.py` writes, as for a command-line run. The workbook in `output/` has no reviewer columns; use Download for those. |
+
+Each run is the existing `classify.py`, started as a separate process in the run's folder with that folder's `config.json`.
+
+### The command line is unchanged
+
+`classify.py` works exactly as described above. Runs started from the command line are not shown in the web app, and their workbooks have no reviewer columns.
+
 ## Configuration reference
 
 All settings live in `config.json`. Defaults below are those in `config.template.json`.
@@ -269,10 +329,17 @@ The tests need no API keys or network access:
 python -m unittest discover tests
 ```
 
+The web app's browser code has its own tests, which need Node.js:
+
+```bash
+node --test "web/tests/**/*.test.js"
+```
+
 ## Project layout
 
 ```
 classify.py              Command-line entry point
+serve.py                 Starts the web app
 config.template.json     Settings template — copy to config.json
 .env.template            Credentials template — copy to .env
 agents/
@@ -293,6 +360,8 @@ data/
   reader.py              Reads the input spreadsheet
   writer.py              Writes the Excel workbook
 lib/epo_patent/          Bundled EPO patent search package
+webapp/                  Web app server: API, run folders, running the pipeline
+web/                     Web app browser code (no build step)
 tests/                   Unit and regression tests
   reference/             Reference companies and the live model check
 ```
