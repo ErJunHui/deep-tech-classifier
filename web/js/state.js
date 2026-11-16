@@ -321,6 +321,8 @@ export function openSetup(fromRun) {
     uploadToken++; estToken++;
   }
   S.showSetup = true;
+  // Setup has no evidence panel: reading view is left (as in the prototype).
+  if (S.reading) { S.reading = false; document.querySelector('.v-workbench').classList.remove('is-reading'); }
   renderAll();
   R('table').scrollTop = 0;
   focusSetupStart();

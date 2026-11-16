@@ -470,3 +470,82 @@ export function pinUnpriced(model, pricedModels) {
   const m = (model || '').trim();
   return !!m && pricedModels.indexOf(m) < 0;
 }
+
+/* ---------- command menu ---------- */
+/* The command menu's items for search q, in order: the actions (cmds
+   entries with an act and not menu: false; while setting up only those
+   marked setup), then "Reset the evidence panel width" (not while setting
+   up), every run, and every company of the open run (not while setting up).
+   Each item is {g, l, sub?, hay?, keys, act, id?}: act names the action;
+   'run' (id: the run id) and 'company' (id: the row index) are the runs and
+   companies. ctx: cmds (commands.js CMDS), runs [{id, file, sub}] newest
+   first, rows (the open run's, or null), activeId (the open run's id, marked
+   'current' when not setting up) and setup (a new run's setup is shown).
+   Every whitespace-separated term of q must appear, ignoring case, in the
+   item's group, label, sub or hay. */
+export function paletteItems(q, { cmds, runs, rows, activeId, setup }) {
+  const items = [];
+  cmds.forEach((c) => { if (c.act && c.menu !== false && (!setup || c.setup)) items.push({ g: 'Action', l: c.l, keys: c.k, act: c.act }); });
+  if (!setup) items.push({ g: 'Action', l: 'Reset the evidence panel width', keys: [], act: 'reset-width' });
+  runs.forEach((r) => items.push({ g: 'Run', l: r.file, sub: r.sub, keys: r.id === activeId && !setup ? ['current'] : [], act: 'run', id: r.id }));
+  if (rows && !setup) {
+    rows.forEach((row) => items.push({
+      g: 'Company', l: row.name, sub: [row.uen, row.domain].filter(Boolean).join(' · '), hay: row.uen + ' ' + row.domain, keys: [], act: 'company', id: row.index,
+    }));
+  }
+  const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return items;
+  return items.filter((it) => {
+    const hay = (it.g + ' ' + it.l + ' ' + (it.sub || '') + ' ' + (it.hay || '')).toLowerCase();
+    return terms.every((t) => hay.indexOf(t) >= 0);
+  });
+}
+
+/* ---------- download ---------- */
+/* The workbook's file name as the server sends it (webapp/app.py
+   get_export): the input name without its extension, '_classified_', the
+   run id without 'run_'. */
+export const exportName = (file, runId) => file.replace(/\.(xlsx|xls|csv)$/i, '') + '_classified_' + runId.replace(/^run_/, '') + '.xlsx';
+
+/* What "Download Excel" does for run with counts k (counts of its rows):
+   {download, title, body}. download false (no row has a result yet, the
+   server has nothing to export) shows only the toast. A run that is not
+   complete gets the partial workbook (the server writes it the same way). */
+export function downloadToast(run, k) {
+  if (!k.done) return { download: false, title: 'Nothing to download yet', body: 'The workbook is available once the first company finishes.' };
+  const partial = run.status !== 'complete';
+  const name = exportName(run.file, run.id);
+  return {
+    download: true,
+    title: (partial ? 'Saved partial workbook ' : 'Saved ') + name,
+    body: (partial ? k.done + ' of ' + k.total + ' companies · ' : '') + k.confirmed + ' verdict' + (k.confirmed === 1 ? '' : 's') + ' confirmed · ' + k.reclassified + ' reclassified · ' + k.open + ' still need review',
+  };
+}
+
+/* ---------- layout ---------- */
+/* The evidence panel's narrowest width (px) when dragged or stored. */
+export const PANEL_MIN_W = 340;
+/* Width w rounded and kept between PANEL_MIN_W and maxW (60% of the space
+   next to the rail); never below PANEL_MIN_W. */
+export const panelWidth = (w, maxW) => Math.round(clamp(w, PANEL_MIN_W, Math.max(PANEL_MIN_W, maxW)));
+
+const isObject = (o) => !!o && typeof o === 'object' && !Array.isArray(o);
+/* The layout stored under localStorage 'dtc.ui' (raw: the stored string, or
+   null): {detailW, reading, collapsed}. detailW is a positive width or null
+   (the default width); collapsed maps evidence section keys to true/false
+   over the default {facts: true}. A missing, unparsable or wrong-shaped
+   value, or field, falls back to its default. */
+export function parseUi(raw) {
+  const out = { detailW: null, reading: false, collapsed: { facts: true } };
+  let v = null;
+  try { v = JSON.parse(raw); } catch (e) { v = null; }
+  if (!isObject(v)) return out;
+  if (typeof v.detailW === 'number' && Number.isFinite(v.detailW) && v.detailW > 0) out.detailW = v.detailW;
+  if (typeof v.reading === 'boolean') out.reading = v.reading;
+  if (isObject(v.collapsed)) {
+    Object.keys(v.collapsed).forEach((k) => { if (typeof v.collapsed[k] === 'boolean') out.collapsed[k] = v.collapsed[k]; });
+  }
+  return out;
+}
+/* The fields of state s that are stored under 'dtc.ui'. */
+export const uiToStore = (s) => ({ detailW: s.detailW, reading: s.reading, collapsed: s.collapsed });

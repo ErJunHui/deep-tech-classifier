@@ -16,7 +16,8 @@ function runCounts(run) {
   return Object.assign({ total: run.total }, run.counts);
 }
 
-function railStatus(run) {
+/* {dot, text, bar} of run's rail item (text is also the command menu's). */
+export function railStatus(run) {
   const k = runCounts(run);
   const bar = k.total ? k.done / k.total : 0;
   const of = k.done + '/' + k.total;

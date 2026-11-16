@@ -4,17 +4,21 @@
    selection and J/K/N movement, sorting, filters, search, the table window,
    Stop/Resume, the evidence panel's sections, the reviewer's decisions, and
    a new run's setup (file, column menus, row ticks, settings popover,
-   analyst sheet, Start). Other actions (download, help, palette, reading
-   view) are bound elsewhere; until then their buttons do nothing. */
+   analyst sheet, Start). The command menu, shortcuts sheet, reading view,
+   divider, filter shortcuts and download are in commands.js. */
 import {
-  S, refreshView, renderDetail, stopActive, resumeActive, resumable,
+  S, renderDetail, stopActive, resumeActive,
   openSetup, cancelSetup, showRun, setupChanged, loadFile, clearFile, startRun,
 } from './state.js';
 import { setupShown } from './store.js';
 import { record, restore, undo } from './decisions.js';
+import {
+  registerActions, refreshFilters, toggleNeeds, focusChips, focusSearch, stopOrResume, toggleReading, download,
+  openHelp, openPalette, paletteQuery, runPalette, closeModal, modalKey, saveUi,
+  onDividerDown, onDividerMove, onDividerUp, onDividerDblClick, dividerKey,
+} from './commands.js';
 import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW } from './model.js';
 import { R } from './render/util.js';
-import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
 import { renderTable, rowBtn } from './render/table.js';
 import { syncForm } from './render/detail.js';
@@ -23,11 +27,6 @@ import { renderSetupTable, openMap, openSettings, closePop, popKind, popOwns, ma
 import { openAnalyst, closeAnalyst, trapTab, THRESHOLD_KEYS } from './render/analyst.js';
 
 const root = () => document.querySelector('.v-workbench');
-
-export function refreshFilters() {
-  refreshView(true);
-  renderStrip(); renderChips(); renderTable();
-}
 
 /* ---------- selection ---------- */
 /* Selects row index id. The table window grows to include it (it never
@@ -70,29 +69,16 @@ export function nextOpen(dir) {
   const anyOpen = rows.some((row) => rowView(row).open);
   toast(anyOpen ? 'No company needing review in this view' : 'Nothing left to review', anyOpen ? 'Clear filters to see the rest.' : 'Every flagged company has a decision.');
 }
-
-/* ---------- filters ---------- */
-export function toggleNeeds() {
-  if (!S.active) return;
-  const on = S.f.status.size === 1 && S.f.status.has('open');
-  S.f.status = on ? new Set() : new Set(['open']);
-  refreshFilters();
-}
-export function focusChips() {
-  if (R('tools').hidden) return;
-  if (getComputedStyle(R('chips')).display === 'none') { S.filtersOpen = true; renderChips(); }
-  const c = R('chips').querySelector('.wb-chip'); if (c) c.focus();
-}
-export function focusSearch() {
-  const s = document.querySelector('[data-fk="search"]');
-  if (s && !R('tools').hidden) s.focus();
-}
-export function stopOrResume() {
-  if (!S.active) return;
-  const run = S.active.run;
-  if (run.status === 'running') stopActive();
-  else if (resumable(run)) resumeActive();
-  else toast('No run in progress', 'S stops a running run or resumes a stopped one.');
+/* The command menu's company: row index id of the open run, searched in
+   the whole run. When the filters hide it they are cleared first. */
+function goToCompany(id) {
+  if (!S.active || !S.active.rows[id]) return;
+  if (S.viewIds.indexOf(id) < 0) {
+    S.f = newFilters();
+    const s = document.querySelector('[data-fk="search"]'); if (s) s.value = '';
+    refreshFilters();
+  }
+  select(id, { focus: true });
 }
 
 /* ---------- decisions ---------- */
@@ -250,8 +236,15 @@ function onClick(e) {
     case 'toggle-sec': {
       const k = a.getAttribute('data-k');
       S.collapsed[k] = !S.collapsed[k];
+      saveUi();
       renderDetail(); break;
     }
+    case 'reading': toggleReading(); break;
+    case 'download': download(); break;
+    case 'help': openHelp(); break;
+    case 'palette': openPalette(); break;
+    case 'close-modal': closeModal(); break;
+    case 'pal-run': runPalette(+a.getAttribute('data-i')); break;
     case 'quick-confirm': keyConfirm(); break;
     case 'open-change': keyChange(); break;
     case 'open-note': focusNote(); break;
@@ -285,6 +278,7 @@ function onClick(e) {
 function onInput(e) {
   const t = e.target;
   const fk = t.getAttribute('data-fk');
+  if (fk === 'pal-q') { paletteQuery(t.value); return; }
   if (fk === 'search') { S.f.q = t.value; refreshFilters(); return; }
   if (fk === 'note') {
     if (!decidable(selectedView())) return;
@@ -340,16 +334,18 @@ function setupEscape() {
   if (popKind()) closePop(true); else cancelSetup();
 }
 
-/* Keys that belong to a focused field, an overlay, or the setup. */
+/* Keys that belong to a focused field, an overlay, the setup or the divider. */
 function onRootKey(e) {
   const t = e.target;
   const fk = t.getAttribute ? t.getAttribute('data-fk') : null;
+  if (S.modal && R('modal').contains(t)) { modalKey(e); return; }
   if (S.analyst && R('overlay').contains(t)) { sheetKey(e); return; }
   if (popKind() && R('pop').contains(t)) { popKey(e); return; }
   if (setupShown()) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setupEscape(); }
     return;
   }
+  if (t === R('divider')) { dividerKey(e); return; }
   if (fk === 'note') {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); recordFromForm(); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); leaveNote(); }
@@ -365,11 +361,31 @@ function onRootKey(e) {
   }
 }
 
-/* Global shortcuts. Bare 1-9, ArrowLeft/ArrowRight and R are never bound. */
+/* Esc with nothing focused: leaves reading view, else closes the selected
+   row's decision form (its draft is kept). False when there was neither. */
+function escapeView() {
+  if (S.reading) { toggleReading(false); return true; }
+  const form = S.active && S.selected != null ? S.forms[selectedKey()] : null;
+  if (!form || !form.open) return false;
+  form.open = false;
+  renderDetail();
+  return true;
+}
+
+/* Global shortcuts. Ctrl/⌘+K toggles the command menu anywhere, also in a
+   field and while setting up (not over the analyst sheet). */
 function onDocKey(e) {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+    e.preventDefault();
+    if (S.modal && S.modal.type === 'palette') closeModal(); else openPalette();
+    return;
+  }
   const t = e.target;
   if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
-  if (S.modal) return;
+  if (S.modal) {
+    if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+    return;
+  }
   if (S.analyst) {
     if (e.key === 'Escape') { e.preventDefault(); closeAnalyst(); }
     return;
@@ -378,6 +394,7 @@ function onDocKey(e) {
   if (setupShown()) {
     // Setting up a new run: only these keys; the rest act on a run.
     if (e.key === 'Escape') setupEscape();
+    else if (e.key === '?') openHelp();
     else if (e.key === 'o' || e.key === 'O') openSetup(null);
     else return;
     e.preventDefault();
@@ -398,7 +415,11 @@ function onDocKey(e) {
     case 'm': case 'M': focusNote(); break;
     case 'u': case 'U': undo(); break;
     case 's': case 'S': stopOrResume(); break;
+    case 'e': case 'E': toggleReading(); break;
+    case 'd': case 'D': download(); break;
     case '/': focusSearch(); break;
+    case '?': openHelp(); break;
+    case 'Escape': done = escapeView(); break;
     default: done = false;
   }
   if (done) e.preventDefault();
@@ -442,9 +463,15 @@ function onDrop(e) {
 
 export function bindEvents() {
   const r = root();
+  registerActions({
+    next: () => move(1), prev: () => move(-1), first: () => moveTo(false), last: () => moveTo(true),
+    'next-open': () => nextOpen(1), 'prev-open': () => nextOpen(-1),
+    confirm: keyConfirm, change: keyChange, note: focusNote, company: goToCompany,
+  });
   [
     ['click', onClick], ['input', onInput], ['change', onChange], ['keydown', onRootKey],
     ['focusin', onFocusIn], ['pointerdown', onPopPointer],
+    ['pointerdown', onDividerDown], ['pointermove', onDividerMove], ['pointerup', onDividerUp], ['pointercancel', onDividerUp], ['dblclick', onDividerDblClick],
     ['dragenter', onDragEnter], ['dragover', onDragOver], ['dragleave', onDragLeave], ['drop', onDrop],
   ].forEach(([ev, fn]) => r.addEventListener(ev, fn));
   r.addEventListener('scroll', onScroll, true);

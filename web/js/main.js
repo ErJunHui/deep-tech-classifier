@@ -1,9 +1,11 @@
-/* Boots the workbench: registers the evidence panel, binds events, loads
-   NumberFlow if it can (the counters fall back to plain text without it),
-   the setup info and the run list, opens the newest run and starts polling. */
+/* Boots the workbench: registers the evidence panel, applies the stored
+   layout, binds events, loads NumberFlow if it can (the counters fall back
+   to plain text without it), the setup info and the run list, opens the
+   newest run and starts polling. */
 import * as api from './api.js';
 import { S, openRun, renderAll, setDetailRenderer, startPolling } from './state.js';
 import { bindEvents } from './events.js';
+import { loadUi } from './commands.js';
 import { renderRailFoot } from './render/rail.js';
 import { renderDetail } from './render/detail.js';
 import { toast } from './render/toast.js';
@@ -18,6 +20,7 @@ async function loadNumberFlow() {
 
 async function boot() {
   setDetailRenderer(renderDetail);
+  loadUi();
   bindEvents();
   await loadNumberFlow();
   // Each is retried by polling when it fails here (state.js tick).

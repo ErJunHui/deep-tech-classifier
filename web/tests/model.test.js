@@ -9,6 +9,7 @@ import {
   tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
+  paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -735,4 +736,110 @@ test('pinUnpriced: a pinned model not in pricedModels; never when nothing is pin
   assert.equal(pinUnpriced('   ', SETUP_INFO.pricedModels), false);
   assert.equal(pinUnpriced(' model-a-fast ', SETUP_INFO.pricedModels), false);
   assert.equal(pinUnpriced('model-x', SETUP_INFO.pricedModels), true);
+});
+
+/* ---------- command menu ---------- */
+const CMD_FIXTURE = [
+  { g: 'Navigate', l: 'Next row', k: ['J', '↓'], act: 'next' },
+  { g: 'Navigate', l: 'Command menu', k: ['Ctrl', 'K'], menu: false, setup: true },
+  { g: 'Decide', l: 'Record the decision (in the note)', k: ['Ctrl', '↵'], menu: false },
+  { g: 'View', l: 'Keyboard shortcuts', k: ['?'], act: 'help', setup: true },
+  { g: 'View', l: 'Reset the panel width', k: ['Double-click'], menu: false, act: 'reset-width' },
+  { g: 'Run', l: 'New run: set it up in the table', k: ['O'], act: 'new-run', setup: true },
+  { g: 'Run', l: 'Download Excel', k: ['D'], act: 'download' },
+];
+const PAL_RUNS = [
+  { id: 'run_b', file: 'pilot.xlsx', sub: 'Today, 09:00 · Running · 3/10' },
+  { id: 'run_a', file: 'companies.xlsx', sub: '2 Nov 2026 · 10 companies · all reviewed' },
+];
+const palCtx = (o = {}) => Object.assign({
+  cmds: CMD_FIXTURE, runs: PAL_RUNS, activeId: 'run_a', setup: false,
+  rows: [row(0, null, [], { name: 'Acme Robotics', uen: '201912345K', domain: 'Robotics' }), row(1, null, [], { name: 'Beta Foods', uen: '', domain: 'Food' })],
+}, o);
+const brief = (items) => items.map((it) => [it.g, it.l]);
+
+test('paletteItems: menu actions, the width reset, every run, then every company of the open run', () => {
+  const items = paletteItems('', palCtx());
+  assert.deepEqual(brief(items), [
+    ['Action', 'Next row'], ['Action', 'Keyboard shortcuts'], ['Action', 'New run: set it up in the table'], ['Action', 'Download Excel'],
+    ['Action', 'Reset the evidence panel width'],
+    ['Run', 'pilot.xlsx'], ['Run', 'companies.xlsx'],
+    ['Company', 'Acme Robotics'], ['Company', 'Beta Foods'],
+  ]);
+  assert.deepEqual(items[0], { g: 'Action', l: 'Next row', keys: ['J', '↓'], act: 'next' });
+  assert.deepEqual(items[4], { g: 'Action', l: 'Reset the evidence panel width', keys: [], act: 'reset-width' });
+  assert.deepEqual(items[5], { g: 'Run', l: 'pilot.xlsx', sub: 'Today, 09:00 · Running · 3/10', keys: [], act: 'run', id: 'run_b' });
+  assert.deepEqual(items[6].keys, ['current']);
+  assert.deepEqual(items[7], { g: 'Company', l: 'Acme Robotics', sub: '201912345K · Robotics', hay: '201912345K Robotics', keys: [], act: 'company', id: 0 });
+  assert.equal(items[8].sub, 'Food', 'a missing UEN leaves no stray separator');
+});
+test('paletteItems: while setting up, only setup actions and the runs; no run is current', () => {
+  const items = paletteItems('', palCtx({ setup: true }));
+  assert.deepEqual(brief(items), [
+    ['Action', 'Keyboard shortcuts'], ['Action', 'New run: set it up in the table'],
+    ['Run', 'pilot.xlsx'], ['Run', 'companies.xlsx'],
+  ]);
+  assert.ok(items.every((it) => !it.keys.includes('current')));
+});
+test('paletteItems: no open run lists no companies', () => {
+  assert.equal(paletteItems('', palCtx({ rows: null, activeId: null })).filter((it) => it.g === 'Company').length, 0);
+});
+test('paletteItems: every search term must appear, in any case, in the group, label, sub or UEN and sector', () => {
+  assert.deepEqual(brief(paletteItems('acme', palCtx())), [['Company', 'Acme Robotics']]);
+  assert.deepEqual(brief(paletteItems('  201912345k  ', palCtx())), [['Company', 'Acme Robotics']]);
+  assert.deepEqual(brief(paletteItems('robotics acme', palCtx())), [['Company', 'Acme Robotics']]);
+  assert.deepEqual(brief(paletteItems('companies.xlsx', palCtx())), [['Run', 'companies.xlsx']]);
+  assert.deepEqual(brief(paletteItems('run pilot', palCtx())), [['Run', 'pilot.xlsx']]);
+  assert.deepEqual(brief(paletteItems('action download', palCtx())), [['Action', 'Download Excel']]);
+  assert.deepEqual(paletteItems('acme zzz', palCtx()), []);
+});
+
+/* ---------- download ---------- */
+test('exportName: the server workbook name, without the input extension or the run_ prefix', () => {
+  assert.equal(exportName('companies.xlsx', 'run_20261113_101500_ab12'), 'companies_classified_20261113_101500_ab12.xlsx');
+  assert.equal(exportName('Pilot List.CSV', 'run_x'), 'Pilot List_classified_x.xlsx');
+  assert.equal(exportName('a.b.xls', 'run_x'), 'a.b_classified_x.xlsx');
+});
+test('downloadToast: a complete run saves the workbook with the review counts', () => {
+  const k = { total: 10, done: 10, confirmed: 1, reclassified: 2, open: 3 };
+  assert.deepEqual(downloadToast({ id: 'run_x', file: 'companies.xlsx', status: 'complete' }, k), {
+    download: true, title: 'Saved companies_classified_x.xlsx', body: '1 verdict confirmed · 2 reclassified · 3 still need review',
+  });
+  assert.equal(downloadToast({ id: 'run_x', file: 'c.xlsx', status: 'complete' }, Object.assign({}, k, { confirmed: 2 })).body, '2 verdicts confirmed · 2 reclassified · 3 still need review');
+});
+test('downloadToast: a run that is not complete saves the partial workbook', () => {
+  const k = { total: 10, done: 4, confirmed: 0, reclassified: 1, open: 2 };
+  ['stopped', 'running', 'interrupted', 'failed'].forEach((status) => {
+    assert.deepEqual(downloadToast({ id: 'run_x', file: 'companies.xlsx', status }, k), {
+      download: true, title: 'Saved partial workbook companies_classified_x.xlsx', body: '4 of 10 companies · 0 verdicts confirmed · 1 reclassified · 2 still need review',
+    });
+  });
+});
+test('downloadToast: nothing to download before the first company finishes', () => {
+  assert.deepEqual(downloadToast({ id: 'run_x', file: 'c.xlsx', status: 'running' }, { total: 10, done: 0, confirmed: 0, reclassified: 0, open: 0 }), {
+    download: false, title: 'Nothing to download yet', body: 'The workbook is available once the first company finishes.',
+  });
+});
+
+/* ---------- panel width and stored layout ---------- */
+test('panelWidth: rounded, at least PANEL_MIN_W, at most maxW (never below the minimum)', () => {
+  assert.equal(PANEL_MIN_W, 340);
+  assert.deepEqual([panelWidth(500.4, 900), panelWidth(200, 900), panelWidth(1200, 900), panelWidth(500, 300)], [500, 340, 900, 340]);
+});
+test('parseUi: the stored width, reading view and collapsed sections', () => {
+  assert.deepEqual(parseUi(JSON.stringify({ detailW: 520, reading: true, collapsed: { facts: false, history: true } })),
+    { detailW: 520, reading: true, collapsed: { facts: false, history: true } });
+});
+test('parseUi: missing, unparsable or wrong-shaped values fall back to the defaults', () => {
+  const def = { detailW: null, reading: false, collapsed: { facts: true } };
+  [null, undefined, '', 'not json', '42', '"x"', 'null', '[]', '[1,2]'].forEach((raw) => assert.deepEqual(parseUi(raw), def, String(raw)));
+  assert.deepEqual(parseUi(JSON.stringify({ detailW: 'wide', reading: 'yes', collapsed: [true] })), def);
+  assert.deepEqual(parseUi(JSON.stringify({ detailW: -5 })), def);
+  assert.deepEqual(parseUi('{"detailW": 1e999}'), def);
+  assert.deepEqual(parseUi(JSON.stringify({ collapsed: { reasoning: true, facts: 'no', build: 1 } })), { detailW: null, reading: false, collapsed: { facts: true, reasoning: true } });
+});
+test('uiToStore: the persisted fields of the state, read back by parseUi', () => {
+  const s = { detailW: 610, reading: true, collapsed: { facts: false }, modal: null, selected: 3 };
+  assert.deepEqual(uiToStore(s), { detailW: 610, reading: true, collapsed: { facts: false } });
+  assert.deepEqual(parseUi(JSON.stringify(uiToStore(s))), { detailW: 610, reading: true, collapsed: { facts: false } });
 });
