@@ -754,6 +754,56 @@ Create a run with `curl` (upload `tests/reference/companies.xlsx`, then `POST /a
 - [ ] **Step 4: Run** `node --test web/tests/` and `python -m unittest discover tests` — expected: pass.
 - [ ] **Step 5: Commit** — "Show runs and live results in the workbench".
 
+### Task 12 and 12b: status, open items and what is not yet verified
+
+Recorded 2026-11-15. Task 12 landed as `ef6bd8d` and `ec8f9d7`; Task 12b (the eight minors from the Task 12 review) as `61a9b0f`. Both were reviewed and approved with no Critical or Important findings. At `61a9b0f`: `node --test "web/tests/**/*.test.js"` 69/69, `python -m unittest discover tests` 269 OK.
+
+**As built, where it differs from the Task 12 text above**
+
+- Step 1's command does not work as written. The fake pipeline path must be absolute (the pipeline starts in the run folder), it lives in `tests/test_webapp/`, and the server needs some `ANTHROPIC_API_KEY` in its environment or `POST /api/runs` returns 400. Working form: `$env:DTC_PIPELINE_CMD = '["python", "<repo>/tests/test_webapp/fake_classify.py"]'; $env:FAKE_DELAY_S = '0.4'; $env:ANTHROPIC_API_KEY = '<any placeholder>'; python serve.py`.
+- `make_big_input.py` is at `tests/test_webapp/make_big_input.py` and writes to `tests/test_webapp/out/` (git-ignored).
+- Table rows carry `data-row` (the prototype's attribute), not `data-i`.
+- `S` and `resumable` live in a new leaf module `web/js/store.js`, re-exported by `state.js`. Modules under `web/js/render/` import from `store.js` and never from `state.js`.
+- Added beyond the file list: `viewKey`, `mergeChanges` in `model.js`; `S.limit`, `S.viewKey`; the `show-more` / `show-all` actions; `tableNotice` in `store.js`; `createPoller` in `state.js`; `web/tests/live.test.js`.
+- The detail panel hook for Task 13 is `setDetailRenderer(fn)` / `renderDetail(opts)` / `detailSig()` in `state.js`. The side column is empty until then.
+- Two table states the prototype has no copy for (wording is new): `Can’t reach the server` when the run list cannot be loaded, and `Couldn’t open this run` with the server's message.
+- The rail shows the model id exactly as reported (the prototype's `claude-` prefix strip is gone), cut with an ellipsis.
+- `web/styles.css` Additions block now also holds the table footer row, `.wb-stat-s.is-wrap` and the rail ellipsis rule.
+
+**Open items (not fixed)**
+
+1. The `N errors · retried on resume` line under "Processed" wraps to three lines inside the stat, and the strip is 110 px tall instead of 63 px on any run with error rows. It was made to wrap so the histogram stays on the first row at a 1440 px window; a shorter line or a different place for it would avoid the extra height.
+2. A NumberFlow file that loads but then throws while running is not guarded; only a file that fails to load falls back to plain text. Seen only in jsdom, which lacks `getAnimations`.
+3. With all 5,000 rows shown (after `End` or `Show all`), the one-off render took 738 ms and one poll took 59 ms, over the 50 ms target. With the default 200-row window no poll exceeded 50 ms.
+4. A click on a run that fails to open shows a toast on every click. Only the automatic 5-second retry is limited to one toast.
+5. After a stale run-list answer is dropped, the next list refresh can be up to 5 seconds late (`state.js`, `lastList` set before the freshness check).
+6. A `/api/setup` request that hangs rather than fails still stalls polling; no fetch has a timeout.
+7. `createPoller` could move out of `state.js` into its own module; `state.js` grew by about 120 lines in 12b.
+8. Carried from Task 11b and visible in this table: error rows sort first under verdict-ascending.
+
+**Not covered by automated tests**
+
+- The poll tick as a whole: dropping stale answers before `applyChanges` / `applyRunList`, the separate setup retry, the `openRun` token and the open-error path. The scheduler (`createPoller`) and the pure helpers are unit-tested; the wiring was checked by hand in jsdom only.
+- Every DOM module: `render/rail.js`, `head.js`, `strip.js`, `chips.js`, `table.js`, `toast.js`, `counter.js` (except `fmtCounter`), `events.js`, `main.js`. The node tests cover `model.js`, `store.js`, `fmtCounter`, `detailText` and the poller only.
+- `tests/test_webapp/make_big_input.py` (run by hand once, 5,000 rows).
+
+**Checked in a browser** (headless Edge 157 driven over the DevTools protocol, 1440×900, fake pipeline, sequential mode; Chrome and Playwright were not available)
+
+Empty state; a live run landing rows in input order with per-row steps; counters updating; Stop and Resume by the `S` key with their toasts and no flip back to "Running"; the completion toast and re-sort into review-priority order; keys `J K ↑ ↓ Home End N ⇧N A F / S`; every sort column, chip, stat button, two histogram bins and search; plain-text counters with the vendored file blocked; the 5,000-row window, footer, `Show 200 more`, `End`, and search for row 4,800; error-row cells; the rail ellipsis; "Can’t reach the server" at load and recovery; one "Lost contact with the server" toast then "Reconnected". No console errors or warnings in any of these.
+
+**Not yet observed**
+
+- The counter roll animation itself, and that switching runs sets the numbers without rolling. The `<number-flow>` elements were present and showed the right values; the motion was not watched.
+- Behaviour with the OS set to reduce motion.
+- The row landing animation as motion (the class was applied; it was not watched).
+- A failed run and an interrupted run in a real browser: the "Failed" / "Interrupted" pills, the failed dot, the `wb-notice` text. Checked in jsdom only, which has no layout.
+- "Couldn’t open this run" in a real browser (jsdom only).
+- Scroll smoothness on a long table, and the poll cost in the browser's Performance panel. Poll cost was measured with a long-task observer instead.
+- The `Show all` button itself (`End` rendered all 5,000 rows; the button was not clicked).
+- A batch-mode run: the steps `Waiting for batch`, `In batch job`, `Validation queued` and the batch phase line were never on screen.
+- A run with Contested or Uncertain rows, or with a real cost: the fake pipeline produces only Clear, Escalate and error rows at US$0.00.
+- Any browser other than Edge 157, any window size other than 1440×900, and the real pipeline (Task 16).
+
 ### Task 13: Evidence panel and decisions
 
 **Files:**
@@ -803,6 +853,60 @@ The design was chosen in a prototype round on 2026-11-13 ("In the table"; see `d
 - [ ] **Step 2: Verify in the browser against the fake pipeline** — expected: dropping `tests/reference/companies.xlsx` lists all its rows as `Queued` with the detected columns; choosing `Not mapped` for Company name highlights the header and the button reads `Map the company name column to start`, and clicking it opens that column menu; unticking two rows updates the count and estimate, unticking all reads `Tick at least one company to start`; dropping a `.txt` shows the server's rejection; a provider with no key blocks Start and points to the analyst sheet; Start creates a run whose `total` is the ticked count, and its rows go from Queued to steps to verdicts in place; "Same settings…" opens setup with those settings and no file; `Cancel` returns to the previous run; the analyst sheet traps Tab and `Esc` closes it, returning focus.
 - [ ] **Step 3: Run** both test suites — expected: pass.
 - [ ] **Step 4: Commit** — "Add new-run setup in the results table".
+
+### Task 14b: Open items from the Task 14 review
+
+Recorded 2026-11-16. Task 14 landed as `48bb8af` and its fix round as `afbb0e5` (draft kept when another run is opened, no duplicate run on Start, setup left alone by the list poll, a failed estimate shown as `estimate unavailable`). Both were reviewed; no Critical or Important finding is open. At `afbb0e5`: `node --test "web/tests/**/*.test.js"` 105/105, `python -m unittest discover tests` 269 OK. The items below are the minor findings and open questions left over. Nothing here changes copy, keys or layout except where an item says so.
+
+**As built, where it differs from the Task 14 text above**
+
+- The draft is `S.draft = {file, cfg, excluded}`: the run's Settings sit under `draft.cfg`.
+- Whether setup is on screen is `setupShown(S)` in `web/js/store.js` (`S.draft && S.showSetup`). A draft can be parked behind a run: opening a run from the rail hides setup and keeps the draft, the rail's draft item (`open-draft`) and `+ New run` return to it, and Cancel or Start ends it. This is the prototype's behaviour; the sentence "While `S.draft` is set the main column shows setup" describes the screen, not the state.
+- The Company name column menu offers `Don’t use a column` (the prototype offers it for optional fields only), so the "Not mapped" check in Step 2 can be done.
+- "Same settings…" re-detects a field that had no column in the old run, as well as fields whose column is missing from the new file.
+- Pure setup rules (`mappingForFile`, chip states, `tickAllState`, `classifyLabel`, `draftRailLine`, the estimate notes) are in `model.js` with node tests; the plan asked for none.
+
+**Files**
+- Modify: `web/js/state.js`, `web/js/events.js`, `web/js/model.js`, `web/js/render/rail.js`, `web/js/render/setup.js`, `web/js/render/analyst.js`
+- Create: `web/js/setup.js` (item 9)
+- Modify for item 11 only: `webapp/settings_map.py`, `tests/test_webapp/` (the setup-info test)
+- Test: `web/tests/model.test.js`, `web/tests/live.test.js`
+
+**Starting a run**
+
+1. **The old run is live while the new one loads.** On Start, the previously open run (or the no-run notice) is painted and takes keys while the `GET` for the new run is in flight, so `S` could stop the old run. If that `GET` fails, the code still announces "Run started" and focuses the old run's Stop button (`state.js` `startRun`). Fix: show the new run's own loading state, or keep global run keys off until it has opened; announce and move focus only when the open succeeded, and show the failure otherwise.
+2. **A draft parked during Start vanishes without a word.** If the user opens another run while the Start `POST` is in flight, the run is created and the draft is used up, but only the rail changes. Fix: toast `Run started: <file>` with the new run in the rail, and leave the user on the run they chose.
+3. **Cancel or `Esc` during the Start `POST` does not stop the run being created.** Fix: ignore Cancel and `Esc` while the request is in flight (the button already shows it is working), or keep the draft until the answer arrives. Do not try to cancel the request: the server may already have started the run.
+4. **Start is not blocked while a replacement file is uploading.** With a file loaded, dropping another and pressing Start before `Reading <name>…` finishes starts the run on the old file. Fix: `startProblem` (or the Start handler) treats `draft.reading` as blocking, with the button reading `Reading <name>…`.
+5. **Stop and Resume rebuild the setup.** `stopActive` and `resumeActive` call `renderAll()` after their await; if setup was opened in the meantime the whole setup is rebuilt once. Fix: use the same rail-only render the list poll uses while `setupShown()`.
+
+**Wording and small rules**
+
+6. **`1 companies`.** The rail's draft line (`draftRailLine`) and any other count of companies must read `1 company`. Check the Start button label and the file line as well.
+7. **Duration text is made by slicing.** `classifyLabel` uses `fmtDur(est.secs).slice(1)` to drop the leading `~`. Fix: give `fmtDur` a way to return the bare duration, or add a small helper, so the label does not depend on another formatter's first character.
+8. **No provider supports batch.** `noBatchText` produces `Only  supports batch jobs` when the list of batch-capable providers is empty. Fix: with none, say `Batch jobs are not available`.
+9. **File size.** `state.js` is 489 lines and `events.js` about 450, each roughly 200 lines larger than before Task 14. Move the setup controller (`openSetup`, `showRun`'s setup half, `cancelSetup`, `loadFile`, `clearFile`, `setupChanged`, the estimate request, `startRun`, and their module state) into `web/js/setup.js`, the way decisions moved to `decisions.js` in 13b. `state.js` must not import it; `events.js` imports the setup actions from it. No behaviour change from the move.
+
+**Needs a decision before work starts**
+
+10. **Copy: "Nothing is sent anywhere until you start the run".** Kept from the prototype, but the file is now uploaded to the local server (`127.0.0.1`) and saved under `uploads/` as soon as it is dropped. Proposed: `Nothing is sent to an AI provider until you start the run.` Alternative: keep the prototype's sentence, since nothing leaves the machine.
+11. **Per-tier price in the settings popover.** The prototype shows `~$x each` beside each quality level; it was left out because `GET /api/setup` has no per-tier price. Proposed: add `costPerCompany` (a number, or `null` when the tier's model has no listed price) to each tier in `setup_info`, computed by the same code the estimate uses for one company with the default settings, and show `~US$0.03 each` or nothing when `null`. Alternative: leave the price out and rely on the estimate in the action bar.
+
+**Not yet observed in a browser**
+
+- The layout at a 1024 px wide window (UX requirement N14). All checks so far ran at 1440 px or wider.
+- A real drag of a file from the desktop. Drops were simulated events carrying a real `File`; the file picker was used for real.
+- The 5-second list poll leaving setup untouched when no run exists, checked by the implementer only.
+- The states the implementer reports and the controller did not repeat: `Used twice` and unmapped column chips, unticking every row, a `.txt` rejection, a provider with no key, the analyst sheet's focus trap, and the 5,000-row setup window.
+
+**Steps**
+
+- [ ] **Step 1: Write the failing tests** for the pure parts: `1 company` in `draftRailLine` and the Start label (item 6); the bare duration (item 7); `noBatchText` with no batch provider (item 8); `startProblem` while a file is being read (item 4); and, if item 11 is approved, the tier price text for a number and for `null`, plus a Python test that every tier in `setup_info` carries `costPerCompany`.
+- [ ] **Step 2: Run** `node --test "web/tests/**/*.test.js"` — expected: the new tests fail.
+- [ ] **Step 3: Implement** items 1–9, and 10–11 as decided.
+- [ ] **Step 4: Verify in the browser against the fake pipeline** — expected: with the new run's `GET` delayed, `S` during the wait does not stop the previously open run, and with that `GET` failing there is no "Run started" announcement; opening another run during a delayed Start shows the `Run started` toast and stays on the chosen run; `Esc` during a delayed Start does not leave a run nobody sees; Start during a delayed replacement upload reads `Reading <name>…` and starts nothing; pressing `S` on a running run and opening setup before it answers does not rebuild the setup; a one-row file reads `1 company` in the rail and on the button; the Task 14 Step 2 checks still pass. Then the items under "Not yet observed": resize the window to 1024 px and go through setup, and drag a real file from the desktop.
+- [ ] **Step 5: Run** both test suites — expected: pass.
+- [ ] **Step 6: Commit** — "Tidy new-run setup after its review".
 
 ### Task 15: Command menu, shortcuts sheet, reading view, divider, download
 
