@@ -573,7 +573,7 @@ def test_zero_interval_writes_at_every_checkpoint(self):
 
 ### Task 8: Estimate, documentation and a measured run
 
-**Status:** Steps 1-3 done in `da380dd`. Review approved. Steps 4-6 (the measured runs and the accuracy check) are still to do; they need live model and EPO keys. `CLASSIFY_DIRECT_SECS` stays an assumption until Step 5 measures it. Minor points remain: the estimate always assumes 8 workers whatever `concurrency.workers` says, and the docs don't mention this; the docs say EPO allows "about 5 searches per minute", but the measured 17s per company works out to about 3.5 per minute.
+**Status:** Steps 1-3 done in `da380dd`. Review approved. Steps 4-6 (the measured runs and the accuracy check) are still to do; they need live model and EPO keys. `CLASSIFY_DIRECT_SECS` stays an assumption until Step 5 measures it. The two minor doc points from the review are fixed: the docs now say the estimate assumes 8 workers, and they explain that 17s per company is the 12s throttle wait plus the search itself, at the busy-time limit of 5 searches per minute.
 
 **Files:**
 - Modify: `webapp/estimate.py:18-27`, `:80-103`, `tests/test_webapp/test_estimate.py`, `README.md`, `PROJECT_OVERVIEW.md`

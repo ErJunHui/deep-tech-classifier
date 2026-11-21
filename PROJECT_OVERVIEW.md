@@ -287,7 +287,7 @@ EPO_SECRET=...                   # EPO OPS API consumer secret
 | `epo.epo_package_dir` | `./lib/epo_patent` | Path to embedded EPO package |
 | `epo.enabled` | `true` | Enable/disable EPO patent lookup |
 
-**Run time.** EPO allows about 5 patent searches per minute, so roughly 17 seconds per company. More workers do not speed this up. With EPO lookups on, it sets the minimum run time for large runs, whatever the worker count.
+**Run time.** When EPO is busy, it allows 5 patent searches per minute. The client waits 12 seconds before each search, and the search itself takes a few seconds, so each company needs about 17 seconds of EPO time. More workers do not speed this up. With EPO lookups on, this sets the minimum run time for large runs, whatever the worker count. The web app's run estimate assumes the default of 8 workers, so with fewer workers runs take longer than it shows.
 
 ---
 
