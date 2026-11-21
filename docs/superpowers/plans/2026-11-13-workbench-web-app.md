@@ -901,12 +901,14 @@ Recorded 2026-11-16. Task 14 landed as `48bb8af` and its fix round as `afbb0e5` 
 
 **Steps**
 
-- [ ] **Step 1: Write the failing tests** for the pure parts: `1 company` in `draftRailLine` and the Start label (item 6); the bare duration (item 7); `noBatchText` with no batch provider (item 8); `startProblem` while a file is being read (item 4); and, if item 11 is approved, the tier price text for a number and for `null`, plus a Python test that every tier in `setup_info` carries `costPerCompany`.
-- [ ] **Step 2: Run** `node --test "web/tests/**/*.test.js"` — expected: the new tests fail.
-- [ ] **Step 3: Implement** items 1–9, and 10–11 as decided.
+- [x] **Step 1: Write the failing tests** for the pure parts: `1 company` in `draftRailLine` and the Start label (item 6); the bare duration (item 7); `noBatchText` with no batch provider (item 8); `startProblem` while a file is being read (item 4); and, if item 11 is approved, the tier price text for a number and for `null`, plus a Python test that every tier in `setup_info` carries `costPerCompany`.
+- [x] **Step 2: Run** `node --test "web/tests/**/*.test.js"` — expected: the new tests fail.
+- [x] **Step 3: Implement** items 1–9, and 10–11 as decided.
 - [ ] **Step 4: Verify in the browser against the fake pipeline** — expected: with the new run's `GET` delayed, `S` during the wait does not stop the previously open run, and with that `GET` failing there is no "Run started" announcement; opening another run during a delayed Start shows the `Run started` toast and stays on the chosen run; `Esc` during a delayed Start does not leave a run nobody sees; Start during a delayed replacement upload reads `Reading <name>…` and starts nothing; pressing `S` on a running run and opening setup before it answers does not rebuild the setup; a one-row file reads `1 company` in the rail and on the button; the Task 14 Step 2 checks still pass. Then the items under "Not yet observed": resize the window to 1024 px and go through setup, and drag a real file from the desktop.
-- [ ] **Step 5: Run** both test suites — expected: pass.
-- [ ] **Step 6: Commit** — "Tidy new-run setup after its review".
+- [x] **Step 5: Run** both test suites — expected: pass.
+- [x] **Step 6: Commit** — "Tidy new-run setup after its review".
+
+**Status (2026-11-21).** Done in `039e677` (item 9: the setup controller is now `web/js/setup.js`), `629a78b` (items 1–8, 10, 11) and `f52d3d8` (the Start count is taken from the rows sent). Each was reviewed with no Critical or Important finding open. Tests: node 126/126, Python 270 OK. Item 10 took the proposed copy and item 11 the proposed per-tier price; `costPerCompany` is a map per provider keyed by tier, beside `tiers`, because `tiers` stays tier → model id. Step 4 ran in a headless browser against the fake pipeline, including setup at 1024 px; a real drag of a file from the desktop is still to do. Copy added that the prototype lacks: `Starting…`, `Opening the run…`, `Start is available once the file has been read.`, the toast body `Classifying <n> companies. It is in the rail under This session.`, `Batch jobs are not available.` and `under US$0.01 each`. Seen and left alone: the rail's Command menu button is clipped at 1024 px; `events.js` is still about 480 lines (the setup handlers stay there).
 
 ### Task 15: Command menu, shortcuts sheet, reading view, divider, download
 
