@@ -208,7 +208,7 @@ class BatchEmitTests(ProgressTestCase):
             "validation": {"validator_enabled": False},
             "epo": {"enabled": False},
             "enrichment": {"enabled": True},
-            "batch": {"enabled": True, "batch_poll_interval_s": 0},
+            "batch": {"enabled": True, "batch_poll_interval_s": 0, "min_companies": 0},
             "llm": {"provider": "fake"},
         }
         os.environ[ENV] = str(self.path)

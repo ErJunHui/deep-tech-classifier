@@ -107,10 +107,10 @@ def _build_epo_config(epo_key: str, epo_secret: str, epo_package_dir: str) -> Di
     }
 
 
-# While companies are gathered with more than one worker, every EPO request goes
-# through this one thread, so the EPO client's own throttler sees one caller. With
-# one worker, and in the sequential pipeline, the lookup runs on the calling thread
-# and this thread is never started (it starts on the first lookup in the lane).
+# While companies are gathered with more than one worker (in either pipeline), every
+# EPO request goes through this one thread, so the EPO client's own throttler sees one
+# caller. With one worker the lookup runs on the calling thread and this thread is
+# never started (it starts on the first lookup in the lane).
 _EPO_LANE = ThreadPoolExecutor(max_workers=1, thread_name_prefix="epo")
 
 

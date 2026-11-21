@@ -145,8 +145,9 @@ class ResumeTestCase(unittest.TestCase):
     def gathered_path(self) -> str:
         return f"checkpoints/llm/gathered_{orch.load_run_state()['run_id']}.jsonl"
 
-    def run_pipeline(self, companies, resume=False, llm=None, epo=False):
-        config = {**CONFIG, "batch": {"enabled": self.batching, "batch_poll_interval_s": 0}}
+    def run_pipeline(self, companies, resume=False, llm=None, epo=False, batch_min=0):
+        config = {**CONFIG, "batch": {"enabled": self.batching, "batch_poll_interval_s": 0,
+                                      "min_companies": batch_min}}
         config["llm"] = {"provider": "fake", **(llm or {})}
         config["concurrency"] = {"workers": self.workers}
         run_id = orch.load_run_state()["run_id"] if resume else None
@@ -407,6 +408,166 @@ class ParallelValidationTests(ResumeTestCase):
         self.assertEqual(len(self.batches.created), 1)     # batch not resubmitted
         self.assertEqual([r["company_name"] for r in results], self.names)
         self.assertEqual([r["confidence"] for r in results], [50, 51, 52, 53, 54, 55])
+
+
+class RunModeTests(ResumeTestCase):
+    batching = True
+
+    def interrupt_in_phase1(self, companies, batch_min):
+        self.enrich.side_effect = [dict(ENRICH_OK), KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies, batch_min=batch_min)
+        self.enrich.reset_mock(side_effect=True)
+        self.enrich.return_value = dict(ENRICH_OK)
+
+    def interrupt_while_classifying(self, companies, batch_min):
+        self.classify.side_effect = [_agent1(), KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies, batch_min=batch_min)
+        self.classify.reset_mock(side_effect=True)
+        self.classify.side_effect = lambda **kw: _agent1()
+
+    def forget_mode(self):
+        """Make the run state look like one written before runs recorded their mode."""
+        state = orch.load_run_state()
+        del state["mode"]
+        orch._save_run_state(state)
+
+    def test_small_run_classifies_directly_without_a_batch_job(self):
+        with self.assertLogs("pipeline.orchestrator", level="INFO") as logs:
+            results = self.run_pipeline(_companies(["A", "B", "C"]), batch_min=100)
+        self.assertEqual(self.batches.created, [])
+        self.assertEqual(self.classify.call_count, 3)
+        self.assertEqual(orch.load_run_state()["mode"], "direct")
+        self.assertEqual([r["company_name"] for r in results], ["A", "B", "C"])
+        self.assertIn(
+            "INFO:pipeline.orchestrator:Classifying 3 companies with direct calls "
+            "(batch jobs are used from 100 companies).", logs.output)
+
+    def test_run_at_the_threshold_uses_a_batch_job(self):
+        self.run_pipeline(_companies(["A", "B", "C"]), batch_min=3)
+        self.assertEqual(len(self.batches.created), 1)
+        self.assertEqual(self.classify.call_count, 0)
+        self.assertEqual(orch.load_run_state()["mode"], "batch")
+
+    def test_mode_is_recorded_before_any_company_is_processed(self):
+        self.interrupt_in_phase1(_companies(["A", "B", "C"]), batch_min=0)
+        self.assertEqual(orch.load_run_state()["mode"], "batch")
+
+    def test_resume_keeps_the_mode_the_run_started_with(self):
+        companies = _companies(["A", "B", "C"])
+        self.interrupt_in_phase1(companies, batch_min=0)
+        results = self.run_pipeline(companies, resume=True, batch_min=100)
+        self.assertEqual(len(self.batches.created), 1)
+        self.assertEqual(self.classify.call_count, 0)
+        self.assertEqual(self.enrich.call_count, 2)  # only B and C
+        self.assertEqual([r["classification"] for r in results], ["deep tech"] * 3)
+
+    def test_resume_of_a_direct_run_stays_direct(self):
+        companies = _companies(["A", "B", "C"])
+        self.interrupt_while_classifying(companies, batch_min=100)
+        self.run_pipeline(companies, resume=True, batch_min=0)
+        self.assertEqual(self.batches.created, [])
+        self.assertEqual(self.classify.call_count, 2)  # only B and C
+
+    def test_run_state_without_a_mode_is_read_as_before(self):
+        companies = _companies(["A", "B", "C"])
+        self.interrupt_while_classifying(companies, batch_min=100)
+        self.forget_mode()
+        results = self.run_pipeline(companies, resume=True, batch_min=0)
+        self.assertEqual(self.batches.created, [])
+        self.assertEqual(self.classify.call_count, 2)  # only B and C
+        self.assertEqual([r["company_name"] for r in results], ["A", "B", "C"])
+        self.assertEqual(orch.load_run_state()["mode"], "direct")
+
+    def test_batch_run_state_without_a_mode_is_resumed_as_a_batch(self):
+        companies = _companies(["A", "B", "C"])
+        self.interrupt_in_phase1(companies, batch_min=0)
+        self.forget_mode()
+        self.run_pipeline(companies, resume=True, batch_min=100)
+        self.assertEqual(len(self.batches.created), 1)
+        self.assertEqual(self.classify.call_count, 0)
+        self.assertEqual(orch.load_run_state()["mode"], "batch")
+
+
+class ParallelDirectTests(ResumeTestCase):
+    workers = 4
+    names = list("ABCDEF")
+
+    def classify_as(self, **kw):
+        return _agent1(60 + self.names.index(kw["company_name"]))
+
+    def test_out_of_order_direct_run_keeps_rows_aligned(self):
+        lock, running, most_running = threading.Lock(), [0], [0]
+
+        def classify(**kw):
+            with lock:
+                running[0] += 1
+                most_running[0] = max(most_running[0], running[0])
+            time.sleep(0.06 - 0.01 * self.names.index(kw["company_name"]))  # later rows finish first
+            with lock:
+                running[0] -= 1
+            return self.classify_as(**kw)
+
+        self.classify.side_effect = classify
+        results = self.run_pipeline(_companies(self.names))
+        self.assertGreater(most_running[0], 1)  # companies were classified side by side
+        self.assertEqual([r["company_name"] for r in results], self.names)
+        self.assertEqual([r["signal_score_llm"] for r in results], [60, 61, 62, 63, 64, 65])
+        self.assertTrue(Path("out.xlsx").exists())
+
+    def test_interrupt_then_resume_classifies_only_the_rest(self):
+        companies = _companies(self.names)
+
+        def classify(**kw):
+            if kw["company_name"] == "D":
+                time.sleep(0.05)  # other rows keep finishing meanwhile
+                raise KeyboardInterrupt()
+            return self.classify_as(**kw)
+
+        self.classify.side_effect = classify
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies)
+        done_companies, partial = load_partial_results(companies)
+        self.assertNotIn("D", [c["company_name"] for c in done_companies])  # D never finished
+        done_before = len(partial)
+
+        self.classify.reset_mock(side_effect=True)
+        self.classify.side_effect = self.classify_as
+        results = self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.classify.call_count, 6 - done_before)
+        self.assertEqual([r["company_name"] for r in results], self.names)
+        self.assertEqual([r["signal_score_llm"] for r in results], [60, 61, 62, 63, 64, 65])
+
+    def test_model_drift_stops_the_run_without_saving_later_rows(self):
+        companies = _companies(self.names)
+        lock, calls = threading.Lock(), [0]
+
+        def classify(**kw):
+            with lock:
+                calls[0] += 1
+                if calls[0] == 3:
+                    self.provider.model_drift = ("fake-v1", "fake-v2")
+            return self.classify_as(**kw)
+
+        self.classify.side_effect = classify
+        with self.assertRaises(ModelChangedError):
+            self.run_pipeline(companies)
+        _, partial = load_partial_results(companies)
+        self.assertLess(len(partial), 3)
+
+    def test_patent_lookups_run_on_the_epo_thread(self):
+        threads = []
+
+        def lookup(*args, **kwargs):
+            threads.append(threading.current_thread().name)
+            return EPOResult(raw_status="ok")
+
+        # Patch both: the EPO lane calls epo_bridge's, the calling thread calls the orchestrator's.
+        with mock.patch.object(epo_bridge, "run_epo_lookup", side_effect=lookup),                 mock.patch.object(orch, "run_epo_lookup", side_effect=lookup):
+            self.run_pipeline(_companies(list("ABC")), epo=True)
+        self.assertEqual(len(threads), 3)
+        self.assertTrue(all(name.startswith("epo") for name in threads), threads)
 
 
 class PatentLookupWarningTests(ResumeTestCase):

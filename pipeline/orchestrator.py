@@ -1,14 +1,17 @@
 """
 Per-company orchestration loop.
 
-Batch flow (batch_enabled=true, default):
+A run is classified in one of two modes, chosen when it starts and kept on resume
+(run_state["mode"]):
+
+Batch flow ("batch": batching on, provider supports it, at least batch.min_companies):
   Phase 1: Agent 0 (enrichment) + EPO lookup for all companies → gathered.jsonl
   Phase 2: Agent 1 batch submit + poll → batch_results.jsonl
   Phase 3: Parse batch results; online retry for failures
   Phase 4: Confidence + Agent 2 (validate) per company → write checkpoints
 
-Sequential fallback (batch_enabled=false):
-  Original per-company flow unchanged.
+Direct flow ("direct": every other run):
+  Gather → classify → validate per company with direct calls, several companies at once.
 """
 
 import json
@@ -22,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
 
 from pipeline.epo_bridge import run_epo_lookup, EPOResult
-from pipeline.parallel import run_indexed, workers_from
+from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, run_indexed, workers_from
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
 from pipeline import epo_bridge, models, progress, validation_record
@@ -60,29 +63,56 @@ def run_pipeline(
     output_path: str,
     resume_run_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    batch_cfg = config.get("batch", {})
-    batch_enabled = batch_cfg.get("enabled", True)
-
     # The model is chosen once, here, before any company is processed. A
     # resumed run reuses the model recorded in its run state.
     run_state = _load_matching_run_state(resume_run_id)
     provider = _start_provider(config, run_state)
     model_info = _model_info(provider, run_state)
     _warn_if_unvalidated(model_info)
+    mode = _run_mode(companies, config, provider, run_state)
     if run_state is not None:
         run_state["model"] = model_info
+        run_state["mode"] = mode
         _save_run_state(run_state)
 
-    if batch_enabled and provider.supports_batching:
+    if mode == "batch":
         return _run_pipeline_batch(
             companies, config, output_path, resume_run_id, provider, run_state, model_info)
-    if batch_enabled:
+    return _run_pipeline_sequential(
+        companies, config, output_path, resume_run_id, provider, run_state, model_info)
+
+
+def _run_mode(
+    companies: List[Dict[str, Any]],
+    config: Dict[str, Any],
+    provider,
+    run_state: Optional[Dict[str, Any]],
+) -> str:
+    """"batch" or "direct". A resumed run keeps its mode whatever the config now says."""
+    if run_state is not None:
+        if "mode" in run_state:
+            return run_state["mode"]
+        # Written before runs recorded their mode: only direct runs skipped the batch phases.
+        skipped_batch = run_state.get("batch_phase") == "complete" and run_state.get("batch_id") is None
+        return "direct" if skipped_batch else "batch"
+
+    batch_cfg = config.get("batch", {})
+    if not batch_cfg.get("enabled", True):
+        return "direct"
+    if not provider.supports_batching:
         logger.warning(
             f"Provider '{provider.provider_name}' does not support batching. "
             "Falling back to sequential pipeline."
         )
-    return _run_pipeline_sequential(
-        companies, config, output_path, resume_run_id, provider, run_state, model_info)
+        return "direct"
+    min_companies = batch_cfg.get("min_companies", DEFAULT_BATCH_MIN_COMPANIES)
+    if len(companies) < min_companies:
+        logger.info(
+            f"Classifying {len(companies)} companies with direct calls "
+            f"(batch jobs are used from {min_companies} companies)."
+        )
+        return "direct"
+    return "batch"
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +264,7 @@ def _run_pipeline_batch(
             "batch_phase": "pending",
             "batch_results_path": None,
             "model": model_info,
+            "mode": "batch",
         }
         _save_run_state(run_state)
     else:
@@ -797,7 +828,7 @@ def _finalize_one(
 
 
 # ---------------------------------------------------------------------------
-# Sequential pipeline (original flow, batch_enabled=false)
+# Direct pipeline (mode "direct": no batch job)
 # ---------------------------------------------------------------------------
 
 def _run_pipeline_sequential(
@@ -824,6 +855,9 @@ def _run_pipeline_sequential(
 
     epo_key = os.getenv("EPO_KEY")
     epo_secret = os.getenv("EPO_SECRET")
+    workers = workers_from(config)
+    # With several workers, patent lookups share the one EPO thread, as in Phase 1.
+    epo_lookup = epo_bridge.lookup_in_lane if workers > 1 else None
 
     _rates = _rates_for(provider)
 
@@ -838,27 +872,22 @@ def _run_pipeline_sequential(
             "run_id": run_id,
             "created_at": datetime.now().isoformat(),
             "batch_id": None,
-            "batch_phase": "complete",  # sequential runs skip batch phases
+            "batch_phase": "complete",  # direct runs skip batch phases
             "batch_results_path": None,
             "model": model_info,
+            "mode": "direct",
         }
         _save_run_state(run_state)
 
     total = len(companies)
 
-    for i, company in enumerate(companies):
-        name = company["company_name"]
-
-        if i in done:
-            logger.info(f"[{i+1}/{total}] Skipping (already done): {name}")
-            continue
-
+    def work(i: int) -> Dict[str, Any]:
+        name = companies[i]["company_name"]
         logger.info(f"[{i+1}/{total}] Processing: {name}")
         t_start = time.time()
-
         try:
             result = _process_one_sequential(
-                company=company,
+                company=companies[i],
                 config=config,
                 epo_enabled=epo_enabled,
                 epo_package_dir=epo_package_dir,
@@ -870,23 +899,26 @@ def _run_pipeline_sequential(
                 rates=_rates,
                 enrichment_enabled=enrichment_enabled,
                 index=i,
+                epo_lookup=epo_lookup,
             )
             result["processing_errors"] = ""
         except Exception as exc:
             logger.error(f"Unhandled error processing '{name}': {exc}", exc_info=True)
             result = _error_result(name)
-        _check_model_drift(provider)
-
-        t_end = time.time()
-        result["processing_time_s"] = round(t_end - t_start, 2)
+        result["processing_time_s"] = round(time.time() - t_start, 2)
         result["company_name"] = name
+        return result
 
+    def record(i: int, result: Dict[str, Any]) -> None:
+        _check_model_drift(provider)
         done[i] = result
         _append_llm_checkpoint(run_id, i, result)
-
-        if (i + 1) % checkpoint_interval == 0 or (i + 1) == total:
+        logger.info(f"[{len(done)}/{total}] Done: {result['company_name']}")
+        if len(done) % checkpoint_interval == 0 or len(done) == total:
             _write_excel_checkpoint(output_path, companies, done)
-            logger.info(f"Checkpoint written at company {i+1}/{total}")
+            logger.info(f"Checkpoint written at company {len(done)}/{total}")
+
+    run_indexed([i for i in range(total) if i not in done], work, record, workers)
 
     results = [done[i] for i in range(total)]
     _log_run_summary(results)
@@ -906,6 +938,7 @@ def _process_one_sequential(
     rates: Dict[str, float],
     enrichment_enabled: bool = True,
     index: Optional[int] = None,
+    epo_lookup: Optional[Callable[..., EPOResult]] = None,
 ) -> Dict[str, Any]:
     """Gather → classify → validate for one company, all with direct API calls."""
     cd = _gather_one(
@@ -918,6 +951,7 @@ def _process_one_sequential(
         enrichment_enabled=enrichment_enabled,
         provider=provider,
         index=index,
+        epo_lookup=epo_lookup,
     )
     progress.emit("step", index=index, step="Classification")
     agent1 = _classify_online(cd, config, provider)

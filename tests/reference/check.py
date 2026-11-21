@@ -112,6 +112,8 @@ def main(argv=None) -> int:
         config.setdefault("pipeline", {}).pop(key, None)
     if args.sequential:
         config.setdefault("batch", {})["enabled"] = False
+    else:  # the reference set is small; check the batch path all the same
+        config.setdefault("batch", {})["min_companies"] = 0
 
     expected = load_expected()
     companies = read_companies(str(REFERENCE_FILE), config)
