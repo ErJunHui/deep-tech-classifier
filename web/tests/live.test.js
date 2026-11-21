@@ -138,26 +138,37 @@ test('detailText: no detail, or a body that was not JSON, gives the fallback', (
   assert.equal(detailText(null, 502), 'The server answered with an error (502).');
 });
 
-/* ---------- error row cost cell ---------- */
-const errRow = (cost) => ({
-  index: 0, name: 'Acme', uen: '', domain: 'Sector', description: '', step: null, history: [],
-  result: { error: true, errorMessage: 'boom', verdict: 'error', conf: 0, risk: 'Escalate', criteria: {}, patents: null, cost },
-});
-const costCell = (html) => html.match(/<td class="[^"]*wb-c-cost">(.*?)<\/td>/)[1];
-test('rowHtml: an error row shows its real cost when it is a number, else —, never ?', () => {
+/* ---------- table row status ---------- */
+const crit = (i, s, p) => ({ innovation: { met: i }, scientific_foundation: { met: s }, proprietary_ip: { met: p } });
+const resRow = (result, history) => ({ index: 0, name: 'Acme', uen: '', domain: 'Sector', description: '', step: null, history: history || [], result });
+const scored = (o) => Object.assign({ verdict: 'general tech', conf: 82, risk: 'Clear', criteria: crit(true, false, false), patents: { status: 'success', count: 2 }, cost: 0.01 }, o);
+const withRun = (fn) => {
   S.active = { run: { id: 'r', status: 'complete', settings: { validatorThreshold: 70 } }, rows: [], cursor: 0 };
-  try {
-    assert.equal(costCell(rowHtml(errRow(0.0123), 0)), '$0.012');
-    assert.equal(costCell(rowHtml(errRow(0), 0)), '$0.000');
-    for (const cost of [null, undefined]) {
-      const cell = costCell(rowHtml(errRow(cost), 0));
-      assert.match(cell, /—/);
-      assert.doesNotMatch(cell, /\?/);
-    }
-  } finally {
-    S.active = null;
-  }
-});
+  try { fn(); } finally { S.active = null; }
+};
+test('rowHtml: an error row says Error in the status, with dashes for confidence and criteria', () => withRun(() => {
+  const html = rowHtml(resRow({ error: true, errorMessage: 'boom', verdict: 'error', conf: 0, risk: 'Escalate', criteria: {}, patents: null, cost: 0.01 }), 0);
+  assert.match(html, /wb-st is-error" title="boom"/);
+  assert.equal((html.match(/>—</g) || []).length, 3);
+  assert.doesNotMatch(html, /\$/, 'cost is not a table column');
+}));
+test('rowHtml: only an open flagged row carries the attention marker, with its risk', () => withRun(() => {
+  const open = rowHtml(resRow(scored({ risk: 'Contested', conf: 55 })), 0);
+  assert.match(open, /wb-st-flag[^>]*><span class="wb-st-q">Contested</);
+  assert.match(open, /wb-confn is-low/);
+  const clear = rowHtml(resRow(scored({})), 0);
+  assert.doesNotMatch(clear, /wb-st-flag|wb-st-note|is-low/);
+  assert.match(clear, />1\/3</);
+}));
+test('rowHtml: a decided row shows a muted note instead of the marker', () => withRun(() => {
+  const confirmed = rowHtml(resRow(scored({ risk: 'Escalate' }), [{ type: 'decision', verdict: 'general tech', at: '2026-11-16T21:44:00' }]), 0);
+  assert.doesNotMatch(confirmed, /wb-st-flag/);
+  assert.match(confirmed, /wb-st-note[^>]*>Reviewed</);
+  const reclass = rowHtml(resRow(scored({ risk: 'Escalate' }), [{ type: 'decision', verdict: 'deep tech', at: '2026-11-16T21:44:00' }]), 0);
+  assert.match(reclass, /wb-st is-deep/);
+  assert.match(reclass, /wb-st-note[^>]*>was general</);
+  assert.match(reclass, /wb-confn is-muted/);
+}));
 
 /* ---------- API errors carry the HTTP status ---------- */
 test('api: a non-2xx answer rejects with the server detail and its status; a network failure has none', async () => {

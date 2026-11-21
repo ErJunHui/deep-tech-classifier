@@ -14,7 +14,7 @@ import { S, refreshView, stopActive, resumeActive, resumable } from './state.js'
 import { openSetup, showRun } from './setup.js';
 import { setupShown } from './store.js';
 import { undo } from './decisions.js';
-import { R, kbd, MOD } from './render/util.js';
+import { R, MOD } from './render/util.js';
 import { renderStrip } from './render/strip.js';
 import { renderChips } from './render/chips.js';
 import { renderTable, rowBtn } from './render/table.js';
@@ -196,8 +196,8 @@ export function toggleReading(force) {
   const top = R('detail').querySelector('[data-fk="reading"]');
   if (top) {
     top.setAttribute('aria-pressed', String(S.reading));
-    top.title = S.reading ? 'Back to the table layout' : 'Give the evidence most of the screen';
-    top.innerHTML = (S.reading ? 'Exit reading view' : 'Reading view') + ' ' + kbd('E');
+    top.title = (S.reading ? 'Back to the table layout' : 'Give the evidence most of the screen') + ' (E)';
+    top.textContent = S.reading ? 'Exit reading view' : 'Reading view';
   }
   const b = S.selected != null && rowBtn(S.selected);
   if (b && b.scrollIntoView) b.scrollIntoView({ block: 'nearest' });

@@ -5,19 +5,21 @@
    which the setup table shares (moreHtml). Without an open run it shows why
    (store.tableNotice). While a new run is set up (setupShown) the table area is
    the setup table's (render/setup.js) and renderTable leaves it alone. */
-import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW, countOf } from '../model.js';
+import { esc, vLabel, vLow, rowView, visibleRows, ROW_WINDOW, countOf } from '../model.js';
 import { S, tableNotice, setupShown } from '../store.js';
-import { R, put, verdictHtml, errorVerdictHtml, riskHtml, marksHtml, revTag } from './util.js';
+import { R, put, CRIT } from './util.js';
 
 /* "Show all" is offered up to this many rows in the view. */
 const SHOW_ALL_MAX = 5000;
 const WAIT_STEPS = new Set(['Waiting for batch', 'In batch job', 'Validation queued']);
+/* Status merges the verdict, the risk flag and the action: the verdict as
+   text, plus an attention marker only while a row still needs a decision.
+   Cost lives in the evidence panel and the summary strip, not per row.
+   l: wide label, s: compact, t: list (narrowest). sl: what sorting means. */
 const COLS = [
-  { k: 'idx', l: '#', a: 'is-r' }, { k: 'name', l: 'Company', a: '' },
-  { k: 'verdict', l: 'Verdict', t: 'V', a: '' }, { k: 'conf', l: 'Conf.', a: 'is-r' },
-  { k: 'crit', l: 'I · S · P', a: 'is-c' }, { k: 'risk', l: 'Risk flag', s: 'Risk', t: 'Risk', a: '' },
-  { k: 'action', l: 'Action', t: '✓', a: '' }, { k: 'patents', l: 'Patents', s: 'Pat.', t: 'Pat.', a: 'is-r' },
-  { k: 'cost', l: 'Cost', a: 'is-r' },
+  { k: 'idx', l: '#', a: 'is-r', sl: 'input order' }, { k: 'name', l: 'Company', a: '', sl: 'company' },
+  { k: 'verdict', l: 'Status', a: '', sl: 'verdict' }, { k: 'conf', l: 'Confidence', s: 'Conf.', a: 'is-r', sl: 'confidence' },
+  { k: 'crit', l: 'Criteria', a: 'is-r' }, { k: 'patents', l: 'Patents', s: 'Pat.', a: 'is-r', sl: 'patents' },
 ];
 const n = (x) => x.toLocaleString('en-US');
 
@@ -28,15 +30,36 @@ let shown = null;
 function headHtml() {
   return '<thead><tr>' + COLS.map((c) => {
     const cls = 'wb-w-' + c.k + ' wb-c-' + c.k;
-    if (c.k === 'crit') return '<th class="' + cls + ' is-c" title="Innovation · Scientific foundation · Proprietary IP"><span class="wb-th is-c">' + c.l + '</span></th>';
+    if (c.k === 'crit') return '<th class="' + cls + '" title="Criteria met: innovation, scientific foundation, proprietary IP"><span class="wb-th is-r is-static">' + c.l + '</span></th>';
     const active = S.sortKey === c.k;
     const ar = active ? (S.sortDir > 0 ? '▲' : '▼') : '';
     const aria = active ? (S.sortDir > 0 ? 'ascending' : 'descending') : 'none';
     const s = c.s || c.l; const t = c.t || s;
     const lbl = s === c.l && t === c.l ? c.l : '<span class="wb-th-l">' + c.l + '</span><span class="wb-th-s">' + s + '</span><span class="wb-th-t">' + t + '</span>';
-    const label = c.k === 'action' ? 'action and review status' : c.l === '#' ? 'input order' : c.l.toLowerCase();
+    const label = c.sl;
     return '<th class="' + cls + '" aria-sort="' + aria + '"><button class="wb-th ' + c.a + '" data-act="sort" data-k="' + c.k + '" data-fk="sort-' + c.k + '" aria-label="Sort by ' + label + '" title="Sort by ' + label + '">' + lbl + '<span class="wb-th-ar" aria-hidden="true">' + ar + '</span></button></th>';
   }).join('') + '</tr></thead>';
+}
+
+/* The status cell: the verdict, then at most one qualifier. An open row
+   (flagged, no decision yet) gets the attention marker with its risk; a
+   decided row a muted note; a clear row nothing. */
+function statusHtml(v) {
+  const deep = v.verdict === 'deep tech';
+  const short = deep ? 'Deep' : 'General';
+  let q = '';
+  if (v.open) q = '<span class="wb-st-flag" title="Needs review: ' + esc(v.r.risk) + '"><span class="wb-st-q">' + esc(v.r.risk) + '</span></span>';
+  else if (v.reclassified) q = '<span class="wb-st-note" title="Reclassified by a reviewer; the pipeline said ' + vLow(v.r.verdict) + '">was ' + vLow(v.r.verdict).replace(' tech', '') + '</span>';
+  else if (v.confirmed) q = '<span class="wb-st-note" title="Reviewed: pipeline verdict confirmed">Reviewed</span>';
+  return '<span class="wb-st' + (deep ? ' is-deep' : '') + '"><span class="wb-st-v">' + vLabel(v.verdict) + '</span><span class="wb-st-s">' + short + '</span>' + q + '</span>';
+}
+
+/* "2/3" criteria met, with the breakdown in the tooltip. */
+function critHtml(criteria) {
+  const met = (k) => !!(criteria && criteria[k] && criteria[k].met);
+  const n = CRIT.filter((x) => met(x[0])).length;
+  const label = CRIT.map((x) => x[2] + (met(x[0]) ? ': met' : ': not met')).join(', ');
+  return '<span class="wb-critn' + (n ? '' : ' is-none') + '" title="' + label + '" aria-label="' + n + ' of 3 criteria met. ' + label + '">' + n + '/3</span>';
 }
 
 /* One body row of the open run (S.active). now: Date.now(), for the landing
@@ -48,41 +71,33 @@ export function rowHtml(row, now) {
   const sel = id === S.selected;
   const nameCell = '<td><div class="wb-co"><button class="wb-rowbtn" data-act="select" data-id="' + id + '" data-fk="row-' + id + '" tabindex="' + (sel ? 0 : -1) + '" title="' + esc(row.name) + '">' + esc(row.name) + '</button><span class="wb-co-d">' + esc(row.domain) + '</span></div></td>';
   const idx = '<td class="wb-idx is-r">' + v.idx + '</td>';
+  const dash = (cls) => '<td class="is-r wb-muted' + (cls ? ' ' + cls : '') + '">—</td>';
   if (!v.r) {
     const p = run.status === 'running' ? row.step : null;
     const st = p
       ? '<span class="wb-step ' + (WAIT_STEPS.has(p) ? 'is-wait' : '') + '">' + esc(p) + '</span>'
       : '<span class="wb-queued">' + (run.status === 'running' ? 'Queued' : 'Not started') + '</span>';
-    return '<tr class="is-pending" data-row="' + id + '" aria-selected="' + sel + '">' + idx + nameCell + '<td class="wb-stepcell">' + st + '</td><td></td><td class="wb-c-crit"></td><td></td><td></td><td class="is-r wb-muted wb-c-patents">—</td><td class="is-r wb-muted wb-c-cost">—</td></tr>';
+    return '<tr class="is-pending" data-row="' + id + '" aria-selected="' + sel + '">' + idx + nameCell + '<td class="wb-stepcell">' + st + '</td><td></td><td class="wb-c-crit"></td><td class="wb-c-patents"></td></tr>';
   }
   const landedAt = S.landed[id];
   const age = landedAt ? now - landedAt : 9999;
   const fresh = age < 240;
-  const landStyle = fresh ? ' style="animation-delay:-' + age + 'ms"' : '';
-  const landCls = fresh ? ' wb-land' : '';
+  const land = (inner) => (fresh ? '<span class="wb-land" style="animation-delay:-' + age + 'ms">' + inner + '</span>' : inner);
   const r = v.r;
   const pat = r.patents;
   if (v.error) {
     return '<tr data-row="' + id + '" aria-selected="' + sel + '">' + idx + nameCell +
-      '<td><span class="' + landCls + '"' + landStyle + '>' + errorVerdictHtml() + '</span></td>' +
-      '<td class="is-r wb-muted">—</td>' +
-      '<td class="is-c wb-c-crit wb-muted">—</td>' +
-      '<td class="wb-muted">—</td>' +
-      '<td><span class="wb-act is-review">' + v.action + '</span></td>' +
-      '<td class="is-r wb-c-patents ' + (pat && pat.count ? '' : 'wb-muted') + '">' + (pat ? pat.count : '—') + '</td>' +
-      // Its real cost when known, else —; never the "?" of a classified row whose model has no listed price.
-      '<td class="is-r wb-dim wb-c-cost">' + (typeof r.cost === 'number' ? money(r.cost, 3) : '<span class="wb-muted">—</span>') + '</td></tr>';
+      '<td>' + land('<span class="wb-st is-error" title="' + esc(r.errorMessage || 'Not classified') + '"><span class="wb-st-v">Error</span><span class="wb-st-s">Error</span></span>') + '</td>' +
+      dash() + dash('wb-c-crit') +
+      '<td class="is-r wb-c-patents' + (pat && pat.count ? '' : ' wb-muted') + '">' + (pat ? pat.count : '—') + '</td></tr>';
   }
   const low = r.conf < Number((run.settings || {}).validatorThreshold);
-  const was = v.reclassified ? '<span class="wb-was" title="Pipeline verdict: ' + vLow(r.verdict) + '"><span class="wb-was-g" aria-hidden="true">↺</span><span class="wb-was-t">was ' + vLow(r.verdict) + '</span></span>' : '';
+  const confTitle = v.reclassified ? ' title="Pipeline confidence in ' + vLow(r.verdict) + ', the verdict the reviewer overturned"' : low ? ' title="Below the validation threshold"' : '';
   return '<tr data-row="' + id + '" aria-selected="' + sel + '">' + idx + nameCell +
-    '<td><span class="' + landCls + '"' + landStyle + '>' + verdictHtml(v.verdict) + was + '</span></td>' +
-    '<td class="is-r"><span class="wb-conf' + (v.reclassified ? ' is-muted' : '') + landCls + '"' + landStyle + (v.reclassified ? ' title="Pipeline confidence in ' + vLow(r.verdict) + ', the verdict the reviewer overturned"' : '') + '><span class="wb-conf-t ' + (low ? 'is-low' : '') + '"><span style="transform:scaleX(' + (r.conf / 100).toFixed(2) + ')"></span></span><span class="wb-conf-n">' + r.conf + '</span></span></td>' +
-    '<td class="is-c wb-c-crit">' + marksHtml(r.criteria) + '</td>' +
-    '<td>' + riskHtml(r.risk) + '</td>' +
-    '<td><span class="wb-act ' + (v.action === 'Needs Review' ? 'is-review' : '') + '">' + v.action + '</span>' + revTag(v) + '</td>' +
-    '<td class="is-r wb-c-patents ' + (pat.count ? '' : 'wb-muted') + '">' + (pat.status === 'disabled' ? '—' : pat.count) + '</td>' +
-    '<td class="is-r wb-dim wb-c-cost">' + (r.cost == null ? '<span title="Pinned model has no listed price">?</span>' : money(r.cost, 3)) + '</td></tr>';
+    '<td>' + land(statusHtml(v)) + '</td>' +
+    '<td class="is-r"><span class="wb-confn' + (v.reclassified ? ' is-muted' : low ? ' is-low' : '') + '"' + confTitle + '>' + land(String(r.conf)) + '</span></td>' +
+    '<td class="is-r wb-c-crit">' + critHtml(r.criteria) + '</td>' +
+    '<td class="is-r wb-c-patents' + (pat.count ? '' : ' wb-muted') + '">' + (pat.status === 'disabled' ? '—' : pat.count) + '</td></tr>';
 }
 
 /* The footer under a table that shows shownCount of its total rows. */
