@@ -295,6 +295,8 @@ Expected: OK
 
 The six minor points from the Task 2 review.
 
+**Status:** Done in `177707b`. Review approved. Three minor points remain: `EPOLaneTests` and the patent-lookup warning tests now patch only the lookup path they expect, so a wrongly routed lookup could reach the real EPO bridge before the test fails; and the warning is now logged before "Phase 1 complete" instead of after.
+
 **Files:**
 - Modify: `pipeline/orchestrator.py` (`_gather_one`, `_phase1_gather`, `_warn_gathering_failures` and its call sites), `pipeline/epo_bridge.py` (lane comment and `lookup_in_lane` docstring)
 - Test: `tests/test_resume.py`
@@ -312,11 +314,11 @@ Decisions:
 - **Slow stop is documented, not changed.** Cancelling queued lane lookups would need a hook in `run_indexed`, which would change Task 1's contract. Add to the `lookup_in_lane` docstring: after an error or Ctrl-C, workers already waiting on the lane still wait for their lookups, so stopping can take up to about one throttled EPO lookup per worker. A second Ctrl-C leaves them to finish in the background.
 - **Flag becomes a callable.** As in Interfaces above. Simplify `EPOLaneTests` to patch only what each case actually reaches.
 
-- [ ] **Step 1: Write the new and changed tests** in `tests/test_resume.py`: index 3 absent after the interrupt, the two EPO-warning tests, and warning-on-resume (logged when the resume gathers something, not logged when Phase 1 is loaded entirely from disk).
-- [ ] **Step 2: Run them, expect failure** for the resume-without-gathering test only. Run: `python -m unittest tests.test_resume -v`
-- [ ] **Step 3: Implement** the warning condition, the `epo_lookup` parameter, the comment and the docstring.
-- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
-- [ ] **Step 5: Commit** — `Tidy the Phase 1 gathering after review`
+- [x] **Step 1: Write the new and changed tests** in `tests/test_resume.py`: index 3 absent after the interrupt, the two EPO-warning tests, and warning-on-resume (logged when the resume gathers something, not logged when Phase 1 is loaded entirely from disk).
+- [x] **Step 2: Run them, expect failure** for the resume-without-gathering test only. Run: `python -m unittest tests.test_resume -v`
+- [x] **Step 3: Implement** the warning condition, the `epo_lookup` parameter, the comment and the docstring.
+- [x] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 5: Commit** — `Tidy the Phase 1 gathering after review`
 
 ---
 
