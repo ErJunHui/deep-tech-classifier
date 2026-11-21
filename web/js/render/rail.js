@@ -5,7 +5,7 @@
    being set up (S.draft) is listed above them as "New run · Not started",
    also while it is parked and another run is on screen; it is the current
    item only while its setup is shown. */
-import { esc, counts, dateLabel, draftRailLine } from '../model.js';
+import { esc, counts, dateLabel, draftRailLine, countOf } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd, MOD } from './util.js';
 
@@ -25,7 +25,7 @@ export function railStatus(run) {
   if (run.status === 'stopped') return { dot: 'is-stopped', text: 'Stopped · ' + of, bar };
   if (run.status === 'interrupted') return { dot: 'is-stopped', text: 'Interrupted · ' + of, bar };
   if (run.status === 'failed') return { dot: 'is-failed', text: 'Failed · ' + of, bar };
-  return { dot: 'is-complete', text: k.total + ' companies · ' + (k.open ? k.open + ' to review' : 'all reviewed') };
+  return { dot: 'is-complete', text: countOf(k.total, 'company', 'companies') + ' · ' + (k.open ? k.open + ' to review' : 'all reviewed') };
 }
 
 /* The draft being set up, at the top of the rail. */
@@ -38,8 +38,9 @@ function draftItem() {
 
 export function renderRail() {
   const now = new Date();
-  // While a new run's setup is shown, no run is the current item: the draft is.
-  const activeId = S.active && !setupShown() ? S.active.run.id : null;
+  // While a new run's setup is shown, no run is the current item: the draft
+  // is. With no run open, the run being opened is (after Start).
+  const activeId = setupShown() ? null : S.active ? S.active.run.id : S.opening;
   const item = (run) => {
     const st = railStatus(run);
     const sub = [dateLabel(run.createdAt, now), run.model].filter(Boolean).join(' · ');

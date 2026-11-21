@@ -6,7 +6,7 @@
    re-exported here. */
 import * as api from './api.js';
 import {
-  currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW,
+  currentDecision, computeIds, newFilters, mergeChanges, viewKey, ROW_WINDOW, countOf,
 } from './model.js';
 import { S, resumable, setupShown } from './store.js';
 import { R } from './render/util.js';
@@ -91,7 +91,7 @@ export function noteSummary(run) {
   if (!prev || prev.status !== 'running' || run.status === 'running') return;
   if (run.status === 'complete') {
     const k = run.counts;
-    toast('Run complete: ' + run.file, k.done + ' companies · ' + k.deep + ' deep tech · ' + k.open + ' need review');
+    toast('Run complete: ' + run.file, countOf(k.done, 'company', 'companies') + ' · ' + k.deep + ' deep tech · ' + k.open + ' need review');
   } else if (run.status === 'failed') {
     toast('Run failed: ' + run.file, run.error);
   }
@@ -100,17 +100,21 @@ export function noteSummary(run) {
 let openToken = 0;
 /* Opens run id: loads it, resets filters and sort, selects the first row.
    Choosing the run that is already open cancels a pending open of another.
-   On failure the error is kept in S.openError (the table shows it when no
-   run is open) and toasted; opts.retry (the automatic retry) toasts only
-   when the failure differs from the last one for the same run. */
+   S.opening holds id until the latest open answers (the table shows it when
+   no run is open). On failure the error is kept in S.openError (the table
+   shows it when no run is open) and toasted; opts.retry (the automatic
+   retry) toasts only when the failure differs from the last one for the
+   same run. */
 export async function openRun(id, opts) {
   const token = ++openToken;
-  if (S.active && S.active.run.id === id) return;
+  if (S.active && S.active.run.id === id) { S.opening = null; return; }
+  S.opening = id;
   let data;
   try {
     data = await api.getRun(id);
   } catch (e) {
     if (token !== openToken) return;
+    S.opening = null;
     const prev = S.openError;
     const repeat = !!(opts && opts.retry) && !!prev && prev.id === id && prev.message === e.message;
     S.openError = { id, message: e.message };
@@ -119,6 +123,7 @@ export async function openRun(id, opts) {
     return;
   }
   if (token !== openToken) return;
+  S.opening = null;
   S.active = data;
   S.openError = null;
   S.landed = {};
@@ -149,7 +154,7 @@ export async function stopActive() {
   const n = run.counts.done;
   toast('Run stopped', n + ' finished ' + (n === 1 ? 'result' : 'results') + ' kept. Resume continues with the next unfinished company.');
   refreshView(false);
-  renderAll();
+  renderRuns(); // the rail only while setup was opened meanwhile
   pollSoon(); // rows that landed since the last poll; drops answers requested before the stop
 }
 
@@ -164,9 +169,11 @@ export async function resumeActive() {
   a.run = run;
   toast('Resuming ' + run.file, run.model ? 'Continuing with ' + run.model + ', the model this run started with.' : 'Continuing with the model this run started with.');
   refreshView(false);
-  renderAll();
-  const stop = R('head').querySelector('[data-fk="stop"]');
-  if (stop) stop.focus();
+  renderRuns(); // the rail only while setup was opened meanwhile
+  if (!setupShown()) {
+    const stop = R('head').querySelector('[data-fk="stop"]');
+    if (stop) stop.focus();
+  }
   pollSoon();
 }
 
@@ -278,7 +285,8 @@ function applyRunList(list) {
   S.listLoaded = true;
   if (!S.active) {
     renderRuns(); // the table's notice: no runs, or the open that failed
-    if (list.length) openRun(list[0].id, { retry: true });
+    // Not while a run is being opened (after Start): its answer decides.
+    if (list.length && !S.opening) openRun(list[0].id, { retry: true });
     return;
   }
   const mine = list.find((r) => r.id === S.active.run.id);

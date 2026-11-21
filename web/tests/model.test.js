@@ -9,6 +9,7 @@ import {
   tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
+  durText, countOf, fileLine, noBatchText, tierPriceText,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
 } from '../js/model.js';
 
@@ -842,4 +843,56 @@ test('uiToStore: the persisted fields of the state, read back by parseUi', () =>
   const s = { detailW: 610, reading: true, collapsed: { facts: false }, modal: null, selected: 3 };
   assert.deepEqual(uiToStore(s), { detailW: 610, reading: true, collapsed: { facts: false } });
   assert.deepEqual(parseUi(JSON.stringify(uiToStore(s))), { detailW: 610, reading: true, collapsed: { facts: false } });
+});
+
+/* ---------- Task 14b: setup review items ---------- */
+test('countOf: one company, many companies, with thousands separators', () => {
+  assert.equal(countOf(1, 'company', 'companies'), '1 company');
+  assert.equal(countOf(0, 'company', 'companies'), '0 companies');
+  assert.equal(countOf(2000, 'row', 'rows'), '2,000 rows');
+});
+test('fileLine: rows, skipped and columns, singular for one', () => {
+  const one = { rows: 1, headers: ['Company'], emptyCounts: { Company: 0 } };
+  assert.equal(fileLine(one, { company_name: 'Company' }), '1 row · 0 skipped (empty name) · 1 column');
+  const many = { rows: 1200, headers: ['Company', 'About'], emptyCounts: { Company: 3 } };
+  assert.equal(fileLine(many, { company_name: 'Company' }), '1,200 rows · 3 skipped (empty name) · 2 columns');
+});
+test('draftRailLine and the Start label: a one-row file reads 1 company', () => {
+  const file = { name: 'one.csv', rows: 1, headers: ['Company'], table: [['Solo Pte Ltd']], emptyCounts: { Company: 0 } };
+  const draft = { file, cfg: { mapping: { company_name: 'Company' } }, excluded: new Set() };
+  assert.equal(draftRailLine(draft), 'one.csv · 1 company');
+  assert.equal(classifyLabel(tickedCount(draft), { known: true, cost: 0.03, secs: 18 }), 'Classify 1 company · ~US$0.03 · about 18 s');
+});
+test('durText: the duration without the leading ~', () => {
+  assert.deepEqual([durText(40), durText(600), durText(5400), durText(7200), durText(0.2)], ['40 s', '10 min', '1 h 30 min', '2 h', '1 s']);
+  [40, 600, 5400].forEach((s) => assert.equal(fmtDur(s), '~' + durText(s)));
+});
+test('noBatchText: the batch providers, or none available', () => {
+  const ant = { id: 'anthropic', label: 'Anthropic', batch: true };
+  const oai = { id: 'openai', label: 'OpenAI', batch: false };
+  const gem = { id: 'gemini', label: 'Google Gemini', batch: false };
+  assert.equal(noBatchText([ant, oai], oai), 'Only Anthropic supports batch jobs; OpenAI works one company at a time.');
+  assert.equal(noBatchText([oai, gem], oai), 'Batch jobs are not available.');
+  assert.equal(noBatchText([], oai), 'Batch jobs are not available.');
+  assert.equal(noBatchText([ant, Object.assign({}, gem, { batch: true }), oai], oai), 'Only Anthropic and Google Gemini support batch jobs; OpenAI works one company at a time.');
+});
+test('startProblem: a file being read blocks the start, named on the button', () => {
+  const draft = named([]);
+  draft.reading = 'new<list>.xlsx';
+  const p = startProblem(draft, SETUP);
+  assert.equal(p.fix, 'reading');
+  assert.equal(p.label, 'Reading new<list>.xlsx…');
+  assert.equal(typeof p.text, 'string');
+  const first = { cfg: { provider: 'openai', mapping: {} }, file: null, excluded: new Set(), reading: 'a.csv' };
+  assert.equal(startProblem(first, SETUP).label, 'Reading a.csv…');
+  draft.reading = '';
+  assert.equal(startProblem(draft, SETUP), null);
+});
+test('tierPriceText: about US$x each, under a cent, or nothing without a price', () => {
+  assert.equal(tierPriceText(0.029425), '~US$0.03 each');
+  assert.equal(tierPriceText(0.1045), '~US$0.10 each');
+  assert.equal(tierPriceText(1.5), '~US$1.50 each');
+  assert.equal(tierPriceText(0.0031), 'under US$0.01 each');
+  assert.equal(tierPriceText(null), '');
+  assert.equal(tierPriceText(undefined), '');
 });

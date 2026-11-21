@@ -48,6 +48,11 @@ test('tableNotice: nothing while a run is open or still opening', () => {
   assert.equal(tableNotice(st({ listLoaded: true, runs: [{ id: 'a' }], active: { run: { id: 'a' } } })), null);
   assert.equal(tableNotice(st({ listLoaded: true, runs: [{ id: 'a' }] })), null);
 });
+test('tableNotice: a run being opened with none open shows the opening notice', () => {
+  assert.deepEqual(tableNotice(st({ listLoaded: true, runs: [{ id: 'a' }], opening: 'a' })), { kind: 'opening' });
+  // A failure of that open wins: openRun clears opening when it answers.
+  assert.equal(tableNotice(st({ listLoaded: true, runs: [{ id: 'a' }], active: { run: { id: 'b' } }, opening: 'a' })), null);
+});
 
 /* ---------- poll scheduler ---------- */
 /* A fake clock: schedule records callbacks; fire runs the next one. */

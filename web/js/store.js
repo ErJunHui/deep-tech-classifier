@@ -10,6 +10,7 @@ export const S = {
   listLoaded: false, // GET /api/runs has answered at least once
   active: null, // the open run: {run, rows, cursor} from GET /api/runs/{id}, kept current by polling
   openError: null, // {id, message}: the last run that failed to open, until a run opens
+  opening: null, // the id of the run being opened (openRun), until it answers
   selected: null, // the selected row's index
   sortKey: 'priority', sortDir: 1,
   f: newFilters(),
@@ -44,9 +45,11 @@ export const setupShown = (s = S) => !!(s.draft && s.showSetup);
    {kind: 'offline'}: the run list has not loaded (the server cannot be reached);
    {kind: 'open-failed', message}: runs exist but the one to show failed to open;
    {kind: 'empty'}: the run list loaded and is empty ("No runs yet");
-   null: a run is open, or one is still opening. */
+   {kind: 'opening'}: a run is being opened (s.opening), as after Start;
+   null: a run is open, or runs exist and none has been asked to open yet. */
 export function tableNotice(s) {
   if (s.active) return null;
+  if (s.opening) return { kind: 'opening' };
   if (!s.listLoaded) return { kind: 'offline' };
   if (!s.runs.length) return { kind: 'empty' };
   if (s.openError) return { kind: 'open-failed', message: s.openError.message };

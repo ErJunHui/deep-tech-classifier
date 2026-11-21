@@ -7,7 +7,7 @@
    rendering in render/setup.js. */
 import * as api from './api.js';
 import {
-  ROW_WINDOW, newDraft, mappingForFile, startProblem, excludeList, estimateRows, tickedCount,
+  ROW_WINDOW, newDraft, mappingForFile, startProblem, excludeList, estimateRows, tickedCount, countOf,
 } from './model.js';
 import { S, setupShown } from './store.js';
 import { openRun, renderAll, noteSummary } from './state.js';
@@ -80,9 +80,10 @@ export function showRun(id) {
 
 /* Discards the draft and shows the open run. restoreFocus (default true):
    focus goes back to where it was before setup was shown, else to the open
-   run in the rail. */
+   run in the rail. Ignored while Start's request for the draft is in flight
+   (draft.starting): the server may already have created the run. */
 export function cancelSetup(restoreFocus) {
-  if (!S.draft) return;
+  if (!S.draft || S.draft.starting) return;
   dropDraft();
   renderAll();
   if (restoreFocus === false) return;
@@ -132,11 +133,13 @@ function estimateSoon() {
    meanwhile, the answer is kept in it and only the rail changes. */
 export async function loadFile(file) {
   const dr = S.draft;
-  if (!file || !setupShown()) return;
+  // While Start's request is in flight the file it uses stays.
+  if (!file || !setupShown() || dr.starting) return;
   const token = ++uploadToken;
   dr.reading = file.name; dr.error = '';
   renderSetupHead();
   if (!dr.file) renderSetupTable();
+  renderSetupBar(); // Start waits for the file (model.startProblem)
   announce('Reading ' + file.name + '…');
   let info;
   try {
@@ -144,7 +147,7 @@ export async function loadFile(file) {
   } catch (e) {
     if (token !== uploadToken || S.draft !== dr) return;
     dr.reading = ''; dr.error = e.message;
-    renderSetupHead(); renderSetupTable();
+    renderSetupHead(); renderSetupTable(); renderSetupBar();
     if (setupShown()) announce(e.message);
     return;
   }
@@ -160,7 +163,7 @@ export async function loadFile(file) {
   closePop(false);
   renderSetup({ enter: true }); renderAnalyst();
   const mapped = !!dr.cfg.mapping.company_name;
-  announce('Loaded ' + info.rows + ' companies from ' + info.name + (mapped ? '.' : '. Choose the company name column to continue.'));
+  announce('Loaded ' + countOf(info.rows, 'company', 'companies') + ' from ' + info.name + (mapped ? '.' : '. Choose the company name column to continue.'));
   const t = document.querySelector(mapped ? '[data-fk="start"]' : '[data-fk="map-company_name"]');
   if (t) t.focus();
 }
@@ -168,7 +171,7 @@ export async function loadFile(file) {
 /* "Change file": back to the drop target, keeping the settings. */
 export function clearFile() {
   const dr = S.draft;
-  if (!dr) return;
+  if (!dr || dr.starting) return;
   uploadToken++;
   dr.file = null; dr.reading = ''; dr.error = '';
   dr.excluded = new Set(); dr.limit = ROW_WINDOW;
@@ -179,7 +182,8 @@ export function clearFile() {
 
 /* Takes the user to what blocks the start (model.startProblem's fix). */
 function fixProblem(prob) {
-  if (prob.fix === 'map') openMap('company_name');
+  if (prob.fix === 'reading') announce(prob.label);
+  else if (prob.fix === 'map') openMap('company_name');
   else if (prob.fix === 'sheet') openAnalyst('start');
   else {
     const b = document.querySelector(prob.fix === 'rows' ? '[data-fk="inc-all"]' : '[data-fk="pick-file"]');
@@ -189,32 +193,51 @@ function fixProblem(prob) {
 
 /* Start: creates the run from the ticked rows, adds it to "This session",
    opens it in the same table and focuses Stop. A refusal is shown in the
-   action bar. One start at a time: the draft and its Start button are gone
-   before the new run is loaded, and starting stays set until then. */
+   action bar. One start at a time: while the request is in flight the
+   draft is marked starting (Start reads "Starting…"; Cancel and Esc do
+   nothing), and starting stays set until the new run has opened.
+   Once created, the draft is used up. When setup was still on screen, the
+   main column shows the run being opened (S.active null, S.opening; no run
+   keys act meanwhile) and only a successful open announces it and focuses
+   Stop; a failed open shows openRun's notice and toast. When the user had
+   gone to another run meanwhile, they stay there and a toast says the run
+   started. */
 export async function startRun() {
   const dr = S.draft;
-  if (!setupShown() || starting) return;
+  if (!setupShown() || starting || dr.starting) return;
   const prob = startProblem(dr, S.setup);
   if (prob) { fixProblem(prob); return; }
   starting = true;
+  dr.starting = true; dr.startError = '';
+  renderSetupBar();
   let run;
   try {
     run = await api.createRun(dr.file.fileId, dr.cfg, excludeList(dr.excluded, dr.file.table.length));
   } catch (e) {
     starting = false;
+    dr.starting = false;
     if (S.draft === dr) { dr.startError = e.message; renderSetupBar(); }
     return;
   }
+  dr.starting = false;
   S.sessionRunIds.add(run.id);
   noteSummary(run);
   const n = tickedCount(dr);
   const shown = S.draft === dr && setupShown();
   // The draft became this run, also when it was parked meanwhile.
   if (S.draft === dr) dropDraft();
-  if (!shown) { starting = false; renderRail(); return; }
+  if (!shown) {
+    starting = false;
+    renderRail();
+    toast('Run started: ' + run.file, 'Classifying ' + countOf(n, 'company', 'companies') + '. It is in the rail under This session.');
+    return;
+  }
+  // The previous run is no longer shown or acted on: the new one is opening.
+  S.active = null; S.selected = null; S.opening = run.id;
   renderAll();
   try { await openRun(run.id); } finally { starting = false; }
-  announce('Run started for ' + n + (n === 1 ? ' company.' : ' companies.'));
+  if (!S.active || S.active.run.id !== run.id || setupShown()) return;
+  announce('Run started for ' + countOf(n, 'company', 'companies') + '.');
   const stop = R('head').querySelector('[data-fk="stop"]');
   if (stop) stop.focus();
 }

@@ -5,7 +5,7 @@
    which the setup table shares (moreHtml). Without an open run it shows why
    (store.tableNotice). While a new run is set up (setupShown) the table area is
    the setup table's (render/setup.js) and renderTable leaves it alone. */
-import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW } from '../model.js';
+import { esc, money, vLow, rowView, visibleRows, ROW_WINDOW, countOf } from '../model.js';
 import { S, tableNotice, setupShown } from '../store.js';
 import { R, put, verdictHtml, errorVerdictHtml, riskHtml, marksHtml, revTag } from './util.js';
 
@@ -98,6 +98,7 @@ function noticeHtml(n) {
   if (!n) return '';
   if (n.kind === 'empty') return '<div class="wb-empty"><h2>No runs yet</h2><p>Start a run to classify a spreadsheet of companies.</p><button class="wb-btn wb-btn-primary" data-act="new-run" data-fk="empty-new">+ New run</button></div>';
   if (n.kind === 'offline') return '<div class="wb-empty"><h2>Can’t reach the server</h2><p>Check that the app is still running, then reload this page. It keeps trying in the meantime.</p></div>';
+  if (n.kind === 'opening') return '<div class="wb-empty" role="status"><h2>Opening the run…</h2></div>';
   return '<div class="wb-empty"><h2>Couldn’t open this run</h2><p>' + esc(n.message) + '</p></div>';
 }
 
@@ -130,7 +131,7 @@ export function renderTable(opts) {
   }
   shown = { ids: win.ids, total: S.viewIds.length };
   if (!win.ids.length) {
-    put(wrap, '<table class="wb-table">' + headHtml() + '</table><div class="wb-empty"><h2>No companies match these filters</h2><p>' + rows.length + ' companies in this run.</p><button class="wb-btn" data-act="clear-filters" data-fk="empty-clear">Clear filters</button></div>');
+    put(wrap, '<table class="wb-table">' + headHtml() + '</table><div class="wb-empty"><h2>No companies match these filters</h2><p>' + countOf(rows.length, 'company', 'companies') + ' in this run.</p><button class="wb-btn" data-act="clear-filters" data-fk="empty-clear">Clear filters</button></div>');
     return;
   }
   const now = Date.now();

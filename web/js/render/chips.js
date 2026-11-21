@@ -1,6 +1,6 @@
 /* The toolbar: search placeholder, Filters toggle and the filter chips.
    Ported from the prototype's renderChips. Counts are over the whole run. */
-import { esc, counts, anyFilter } from '../model.js';
+import { esc, counts, anyFilter, countOf } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put } from './util.js';
 
@@ -15,7 +15,7 @@ export function renderChips() {
   const k = counts(S.active.rows);
   const f = S.f;
   const search = tools.querySelector('[data-fk="search"]');
-  if (search) search.placeholder = 'Search all ' + total.toLocaleString('en-US') + ' companies';
+  if (search) search.placeholder = total === 1 ? 'Search 1 company' : 'Search all ' + countOf(total, 'company', 'companies');
   const nAct = f.risk.size + f.verdict.size + f.status.size + (f.bin != null ? 1 : 0);
   tools.classList.toggle('is-open', S.filtersOpen);
   const tg = R('filt-tg');

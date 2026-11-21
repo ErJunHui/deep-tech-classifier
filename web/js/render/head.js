@@ -1,7 +1,7 @@
 /* The run header: file, status pill, actions, run facts, settings tags and
    the progress line or notice. Ported from the prototype's renderHead, plus
    the Failed and Interrupted pills and their notices. */
-import { esc, counts, dateLabel } from '../model.js';
+import { esc, counts, dateLabel, countOf } from '../model.js';
 import { S, resumable, setupShown } from '../store.js';
 import { R, kbd } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
@@ -41,7 +41,7 @@ export function renderHead(opts) {
   acts += '<button class="wb-btn" data-act="download" data-fk="download"><span class="wb-l-long">Download Excel</span><span class="wb-l-short">Excel</span> ' + kbd('D') + '</button>';
   const k = counts(S.active.rows);
   const meta = '<span class="wb-mono">' + esc(run.id) + '</span>' + (date ? '<span>' + esc(date) + '</span>' : '') +
-    (run.model ? '<span class="wb-mono">' + esc(run.model) + '</span>' : '') + '<span class="wb-num">' + k.total + ' companies</span>';
+    (run.model ? '<span class="wb-mono">' + esc(run.model) + '</span>' : '') + '<span class="wb-num">' + countOf(k.total, 'company', 'companies') + '</span>';
   const modelTxt = run.model ? '<span class="wb-mono">' + esc(run.model) + '</span>, the model this run started with' : 'the model this run started with';
   let extra = cfgTags(run.settings || {}, run.batch);
   if (run.status === 'running') {
@@ -53,6 +53,6 @@ export function renderHead(opts) {
   } else if (run.status === 'failed') {
     extra += '<div class="wb-notice">' + esc(run.error || 'The pipeline stopped with an error.') + '</div>';
   }
-  const tip = [run.id, date, run.model, k.total + ' companies'].filter(Boolean).join(' · ');
+  const tip = [run.id, date, run.model, countOf(k.total, 'company', 'companies')].filter(Boolean).join(' · ');
   putWithCounters(el, '<div class="wb-head-row"><div class="wb-head-t"><h1 title="' + esc(tip) + '"><span class="wb-h1-f">' + esc(run.file) + '</span> <span class="wb-status ' + pill[0] + '">' + pill[1] + '</span></h1><div class="wb-head-meta">' + meta + '</div></div><div class="wb-head-acts">' + acts + '</div></div>' + extra, opts);
 }

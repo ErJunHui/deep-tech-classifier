@@ -179,11 +179,26 @@ def to_pipeline_config(settings: Dict[str, Any], base: Dict[str, Any], project_r
     return config
 
 
+def _cost_per_company(provider: str, tier: str) -> Any:
+    """
+    USD for one company with the default settings on provider's tier (its
+    model, not a pin), by the code POST /api/estimate uses; None when the
+    tier's model has no listed price.
+    """
+    # Imported here: webapp.estimate imports this module.
+    from webapp.estimate import estimate
+
+    settings = clean_settings({"provider": provider, "tier": tier, "model": ""})
+    return estimate(settings, 1)["cost"]
+
+
 def setup_info(env: Mapping[str, str]) -> Dict[str, Any]:
     """
     What the browser needs to show the settings form.
 
-    Reports whether each API key is set, never its value.
+    Reports whether each API key is set, never its value. Per provider,
+    tiers maps each tier to its model and costPerCompany each tier to the
+    price of one company at the default settings (None when not priced).
     """
     providers = [
         {
@@ -193,6 +208,7 @@ def setup_info(env: Mapping[str, str]) -> Dict[str, Any]:
             "keySet": bool(env.get(key_var)),
             "batch": pid in BATCH_PROVIDERS,
             "tiers": {tier: models.CANDIDATES[pid][tier][0] for tier in models.TIERS},
+            "costPerCompany": {tier: _cost_per_company(pid, tier) for tier in models.TIERS},
         }
         for pid, (label, key_var) in _PROVIDERS.items()
     ]

@@ -9,9 +9,9 @@
    render does nothing while the draft is parked (store.setupShown false),
    so an answer for it never paints over the run on screen. */
 import {
-  esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, skippedCount, startProblem,
+  esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows,
+  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
@@ -37,16 +37,12 @@ const CHIP = {
   auto: { tag: '<span class="wb-tag is-auto">Detected</span>', word: 'detected' },
   changed: { tag: '<span class="wb-tag">Changed</span>', word: 'changed' },
 };
-const n = (x) => x.toLocaleString('en-US');
 const root = () => document.querySelector('.v-workbench');
 
 /* The provider of the draft's settings, or null when setup does not list it. */
 export const draftProvider = () => S.setup.providers.find((p) => p.id === S.draft.cfg.provider) || null;
-/* "Only Anthropic supports batch jobs; …" for a provider without batch jobs. */
-export function noBatchText(prov) {
-  const labels = S.setup.providers.filter((p) => p.batch).map((p) => p.label);
-  return 'Only ' + labels.join(' and ') + ' supports batch jobs; ' + prov.label + ' works one company at a time.';
-}
+/* Why batch mode is off for prov (model.noBatchText). */
+export const batchOffText = (prov) => noBatchText(S.setup.providers, prov);
 
 /* Reads msg out through the live region. */
 export function announce(msg) {
@@ -81,7 +77,7 @@ function headHtml() {
   const dr = S.draft; const d = dr.cfg; const f = dr.file;
   const title = dr.fromId ? 'New run with the same settings' : 'New run';
   let meta = f
-    ? '<span class="wb-file-n">' + esc(f.name) + '</span><span class="wb-num">' + n(f.rows) + ' rows · ' + n(skippedCount(f, d.mapping)) + ' skipped (empty name) · ' + f.headers.length + ' columns</span>'
+    ? '<span class="wb-file-n">' + esc(f.name) + '</span><span class="wb-num">' + esc(fileLine(f, d.mapping)) + '</span>'
     : '<span>' + (dr.fromId ? 'Settings and column mapping from <span class="wb-mono">' + esc(dr.fromId) + '</span>. ' : '') + 'Drop a spreadsheet anywhere in this column.</span>';
   if (f && dr.reading) meta += '<span>Reading ' + esc(dr.reading) + '…</span>';
   const h = '<div class="wb-head-row"><div class="wb-head-t"><h1><span class="wb-h1-f">' + title + '</span> <span class="wb-status">Not started</span></h1><div class="wb-head-meta">' + meta + '</div></div>' +
@@ -126,7 +122,7 @@ function emptyHtml() {
     '<p>One row per company. Column headers are matched case-insensitively, and your companies appear in this table before anything runs.</p>' +
     '<div class="wb-sempty-acts"><button class="wb-btn wb-btn-primary" data-act="pick-file" data-fk="pick-file">Choose file…</button></div>' +
     (dr.error ? '<p class="wb-snote is-err" role="alert">' + esc(dr.error) + '</p>' : '') +
-    '<small>Excel (.xlsx, .xls) or CSV. Nothing is sent anywhere until you start the run.</small></div></div>';
+    '<small>Excel (.xlsx, .xls) or CSV. Nothing is sent to an AI provider until you start the run.</small></div></div>';
 }
 
 /* One file row. cols: [{fl, at}] with at the header index of the field's
@@ -188,7 +184,8 @@ export function renderSetupBar() {
   const prob = startProblem(dr, S.setup);
   const prov = draftProvider();
   const open = !!(pop && pop.kind === 'settings');
-  const label = prob ? prob.label : classifyLabel(tickedCount(dr), e, dr.estFailed);
+  // While Start's request is in flight (dr.starting) Start and Cancel are inert.
+  const label = dr.starting ? 'Starting…' : prob ? prob.label : classifyLabel(tickedCount(dr), e, dr.estFailed);
   const batch = e ? e.batch : !!(prov && prov.batch && d.batch);
   let note;
   if (prob) note = '<p class="wb-setbar-note is-why" id="wb-setbar-why">' + esc(prob.text) + '</p>';
@@ -200,8 +197,8 @@ export function renderSetupBar() {
   const why = prob || dr.startError;
   put(R('setbar'), '<div class="wb-setbar-top"><button class="wb-btn wb-btn-sm wb-set" data-act="settings-pop" data-fk="settings" aria-haspopup="dialog" aria-expanded="' + open + '">Settings: <b>' + esc(qualityName(d.tier)) + (isCustom(d, S.setup.defaults) ? ', customised' : '') + '</b> <span aria-hidden="true">▾</span></button>' +
     '<span class="wb-setbar-meta">' + (prov ? esc(prov.label) + ' · ' : '') + '<span class="wb-mono">' + esc(modelFor(d, S.setup)) + '</span></span></div>' +
-    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup">Cancel ' + kbd('Esc') + '</button>' +
-    '<button class="wb-btn wb-btn-primary wb-go" data-act="start" data-fk="start"' + (prob ? ' aria-disabled="true"' : '') + (why ? ' aria-describedby="wb-setbar-why"' : '') + '>' + esc(label) + '</button></div>' + note);
+    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup"' + (dr.starting ? ' aria-disabled="true"' : '') + '>Cancel ' + kbd('Esc') + '</button>' +
+    '<button class="wb-btn wb-btn-primary wb-go" data-act="start" data-fk="start"' + (prob || dr.starting ? ' aria-disabled="true"' : '') + (dr.starting ? ' aria-busy="true"' : '') + (why ? ' aria-describedby="wb-setbar-why"' : '') + '>' + esc(label) + '</button></div>' + note);
 }
 
 /* The head, table, bar and open popover of the draft. opts: renderSetupTable's. */
@@ -274,13 +271,18 @@ export function openMap(field) {
 /* The field the open column menu is for, or null. */
 export const mapField = () => (pop && pop.kind === 'map' ? pop.field : null);
 
+/* The price of one company on tier beside its quality level, or nothing. */
+function tierPriceHtml(prov, tier) {
+  const t = prov && prov.costPerCompany ? tierPriceText(prov.costPerCompany[tier]) : '';
+  return t ? '<span class="wb-opt-p wb-num">' + t + '</span>' : '';
+}
 function settingsPopHtml() {
   const d = S.draft.cfg; const prov = draftProvider();
   return '<fieldset class="wb-fs"><legend>How careful should the AI be?</legend><div class="wb-qlist" role="radiogroup" aria-label="Quality">' + QUALITY.map((q) =>
-    '<label class="wb-opt"><input type="radio" name="wb-q" value="' + q.tier + '" data-fk="q-' + q.tier + '"' + (d.tier === q.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + (q.tier === S.setup.defaults.tier ? ' <span class="wb-tag is-auto">Recommended</span>' : '') + '</span><span class="wb-opt-s">' + q.sub + (prov ? ' Uses ' + esc(prov.tiers[q.tier]) + '.' : '') + '</span></label>').join('') + '</div></fieldset>' +
+    '<label class="wb-opt"><input type="radio" name="wb-q" value="' + q.tier + '" data-fk="q-' + q.tier + '"' + (d.tier === q.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + (q.tier === S.setup.defaults.tier ? ' <span class="wb-tag is-auto">Recommended</span>' : '') + tierPriceHtml(prov, q.tier) + '</span><span class="wb-opt-s">' + q.sub + (prov ? ' Uses ' + esc(prov.tiers[q.tier]) + '.' : '') + '</span></label>').join('') + '</div></fieldset>' +
     '<fieldset class="wb-fs"><legend>What to check</legend>' + PLAIN_STEPS.map((s) => {
       const off = s.key === 'batch' && !!prov && !prov.batch;
-      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s">' + esc(off ? noBatchText(prov) : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
+      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s">' + esc(off ? batchOffText(prov) : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
     }).join('') + '</fieldset>' +
     '<div class="wb-pop-foot"><button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="analyst-open" data-fk="analyst-open">Analyst settings…</button><button class="wb-btn wb-btn-sm" data-act="settings-done" data-fk="settings-done">Done</button></div>';
 }

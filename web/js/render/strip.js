@@ -1,7 +1,7 @@
 /* The summary strip: counts over the whole run and the confidence
    histogram. Ported from the prototype's renderStrip, plus the errors
    sub-line under Processed. */
-import { counts, rowView } from '../model.js';
+import { counts, rowView, countOf } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
@@ -44,7 +44,7 @@ export function renderStrip(opts) {
   html += '<div class="wb-hist"><div class="wb-hist-bars" role="group" aria-label="Confidence distribution by final verdict">' + bins.map((b, i) => {
     const n = b.d + b.g;
     const lo = i * 10; const hi = i === 9 ? 100 : i * 10 + 9;
-    return '<button class="wb-bin" data-act="bin" data-bin="' + i + '" data-fk="bin-' + i + '" aria-pressed="' + (f.bin === i) + '" ' + (n ? '' : 'disabled') + ' title="Confidence ' + lo + '–' + hi + ': ' + b.d + ' deep tech, ' + b.g + ' general tech" aria-label="Confidence ' + lo + ' to ' + hi + ', ' + n + ' companies">' +
+    return '<button class="wb-bin" data-act="bin" data-bin="' + i + '" data-fk="bin-' + i + '" aria-pressed="' + (f.bin === i) + '" ' + (n ? '' : 'disabled') + ' title="Confidence ' + lo + '–' + hi + ': ' + b.d + ' deep tech, ' + b.g + ' general tech" aria-label="Confidence ' + lo + ' to ' + hi + ', ' + countOf(n, 'company', 'companies') + '">' +
       '<span class="wb-bin-g" style="height:' + Math.round(b.g / max * 30) + 'px"></span><span class="wb-bin-d" style="height:' + Math.round(b.d / max * 30) + 'px"></span></button>';
   }).join('') + '<span class="wb-hist-th" style="left:' + th + '%" title="Validation threshold ' + th + '"></span></div>' +
     '<div class="wb-hist-ax"><span>0</span><span><i class="wb-sw" style="background:var(--deep)"></i>deep · <i class="wb-sw" style="background:var(--border-strong)"></i>general</span><span>100</span></div></div>';

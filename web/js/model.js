@@ -11,12 +11,18 @@ export const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (ch) =>
 export const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
 export const pad = (n) => String(n).padStart(2, '0');
 export const money = (n, d) => '$' + n.toFixed(d == null ? 2 : d);
-export const fmtDur = (s) => {
-  if (s < 90) return '~' + Math.max(1, Math.round(s)) + ' s';
-  if (s < 3600) return '~' + Math.round(s / 60) + ' min';
+/* A duration of s seconds: '40 s', '10 min', '1 h 30 min'. fmtDur adds the
+   '~' of an estimate. */
+export const durText = (s) => {
+  if (s < 90) return Math.max(1, Math.round(s)) + ' s';
+  if (s < 3600) return Math.round(s / 60) + ' min';
   const h = Math.floor(s / 3600); const m = Math.round((s % 3600) / 60);
-  return '~' + h + ' h' + (m ? ' ' + m + ' min' : '');
+  return h + ' h' + (m ? ' ' + m + ' min' : '');
 };
+export const fmtDur = (s) => '~' + durText(s);
+/* 'n one' for 1, else 'n many', n with thousands separators: '1 company',
+   '2,000 companies'. */
+export const countOf = (n, one, many) => n.toLocaleString('en-US') + ' ' + (n === 1 ? one : many);
 export const confWord = (n) => n >= 90 ? 'Near-definitive' : n >= 75 ? 'Strong' : n >= 60 ? 'Moderate' : n >= 45 ? 'Borderline' : n >= 30 ? 'Weak' : 'Minimal';
 export const signed = (n) => (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n);
 export const flip = (v) => (v === 'deep tech' ? 'general tech' : 'deep tech');
@@ -308,11 +314,14 @@ export function tickedCount(draft) {
                      a table, file.rows) are read
      draft.cfg       the run's Settings; cfg.provider and cfg.mapping are read
      draft.excluded  a Set of the file's 0-based table row indexes left out
+     draft.reading   the name of a file being uploaded, or '' (optional)
    A row counts as ticked when it is not excluded and its cell in the mapped
    company name column is not blank (the pipeline skips blank names).
    setup is GET /api/setup: setup.providers[] holds {id, label, keyVar, keySet}. */
 export function startProblem(draft, setup) {
   const d = draft.cfg;
+  // A file being uploaded (draft.reading, its name) replaces the one shown.
+  if (draft.reading) return { fix: 'reading', label: 'Reading ' + draft.reading + '…', text: 'Start is available once the file has been read.' };
   if (!draft.file) return { fix: 'file', label: 'Choose an input file to start', text: 'Drop a spreadsheet on this column or choose one to see your companies here.' };
   if (!d.mapping.company_name) return { fix: 'map', label: 'Map the company name column to start', text: 'Choose which spreadsheet column holds the company names on the highlighted header.' };
   if (!tickedCount(draft)) return { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' };
@@ -393,11 +402,27 @@ export const estimateRows = (draft) => (draft.file ? tickedCount(draft) : ESTIMA
    POST /api/estimate's answer, or null before the first one. failed: the
    latest estimate request failed, so no numbers are shown. */
 export function classifyLabel(n, est, failed) {
-  const head = 'Classify ' + n.toLocaleString('en-US') + ' compan' + (n === 1 ? 'y' : 'ies');
+  const head = 'Classify ' + countOf(n, 'company', 'companies');
   if (failed) return head + ' · estimate unavailable';
   if (!est) return head;
-  return head + ' · ' + (est.known ? '~US$' + est.cost.toFixed(2) : 'cost unknown') + ' · about ' + fmtDur(est.secs).slice(1);
+  return head + ' · ' + (est.known ? '~US$' + est.cost.toFixed(2) : 'cost unknown') + ' · about ' + durText(est.secs);
 }
+/* The settings popover's price beside a quality level: '~US$0.03 each', 'under
+   US$0.01 each' below a cent, '' when the tier has no listed price (cost
+   null, GET /api/setup providers[].costPerCompany). */
+export function tierPriceText(cost) {
+  if (cost == null) return '';
+  return cost < 0.01 ? 'under US$0.01 each' : '~US$' + cost.toFixed(2) + ' each';
+}
+/* Why batch mode is off for provider prov: the providers that have it, or
+   none. providers: GET /api/setup providers[] ({label, batch}). */
+export function noBatchText(providers, prov) {
+  const labels = providers.filter((p) => p.batch).map((p) => p.label);
+  if (!labels.length) return 'Batch jobs are not available.';
+  return 'Only ' + labels.join(' and ') + (labels.length === 1 ? ' supports' : ' support') + ' batch jobs; ' + prov.label + ' works one company at a time.';
+}
+/* The setup head's file line (text): '1 row · 0 skipped (empty name) · 1 column'. */
+export const fileLine = (file, mapping) => countOf(file.rows, 'row', 'rows') + ' · ' + skippedCount(file, mapping).toLocaleString('en-US') + ' skipped (empty name) · ' + countOf(file.headers.length, 'column', 'columns');
 /* What the action bar and the analyst sheet say when the estimate failed. */
 export const ESTIMATE_FAILED = 'Estimate unavailable; it is tried again after the next change.';
 /* The estimate's caveat, naming the model it was priced as when that is not
@@ -414,8 +439,7 @@ export function unknownCostLine(est) {
 /* The draft's line in the rail (text, not HTML). */
 export function draftRailLine(draft) {
   if (!draft.file) return 'No file yet';
-  const n = tickedCount(draft);
-  return draft.file.name + ' · ' + n.toLocaleString('en-US') + (n === 1 ? ' company' : ' companies');
+  return draft.file.name + ' · ' + countOf(tickedCount(draft), 'company', 'companies');
 }
 
 /* Headers no field reads: they are kept unchanged in the output. */
@@ -518,7 +542,7 @@ export function downloadToast(run, k) {
   return {
     download: true,
     title: (partial ? 'Saved partial workbook ' : 'Saved ') + name,
-    body: (partial ? k.done + ' of ' + k.total + ' companies · ' : '') + k.confirmed + ' verdict' + (k.confirmed === 1 ? '' : 's') + ' confirmed · ' + k.reclassified + ' reclassified · ' + k.open + ' still need review',
+    body: (partial ? k.done + ' of ' + countOf(k.total, 'company', 'companies') + ' · ' : '') + k.confirmed + ' verdict' + (k.confirmed === 1 ? '' : 's') + ' confirmed · ' + k.reclassified + ' reclassified · ' + k.open + ' still need review',
   };
 }
 
