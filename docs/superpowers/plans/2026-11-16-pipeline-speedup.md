@@ -443,6 +443,8 @@ class ParallelDirectTests(ResumeTestCase):
 
 ### Task 5: Reuse the EPO client and drop the fixed sleeps
 
+**Status:** Done in `40add68`. Review approved. `epo_ops` 4.2.1 renews its access token by itself, so the cached client needs no refresh code. Minor points remain: `run_epo_lookup` keeps imports it no longer uses so a broken package still reports "EPO Import Error", and they need a comment; the cache key leaves out the EPO secret and the cache is never cleared, so a long-running web app process keeps the old client after the secret changes; the test does not check that the classifier is built once.
+
 **Files:**
 - Modify: `pipeline/epo_bridge.py:50-106`, `:156-184`
 - Test: `tests/test_fixes.py` (`EpoBridgeTests`)
@@ -455,7 +457,7 @@ Decisions:
 - Delete the `time.sleep(epo_config["api"]["search_delay_seconds"])` at `epo_bridge.py:180` and its comment. The library's `Throttler` already waits `60 / limit` before each request.
 - `lib/epo_patent/processors/patent_fetcher.py` is not edited here; it sleeps for `detail_delay_seconds`, which is now `0`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_no_fixed_delays_are_configured(self):
@@ -472,10 +474,10 @@ def test_client_is_built_once_and_lookup_does_not_sleep(self):
     sleep.assert_not_called()
 ```
 
-- [ ] **Step 2: Run them, expect failure.** Run: `python -m unittest tests.test_fixes.EpoBridgeTests -v`
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
-- [ ] **Step 5: Commit** — `Reuse the EPO client and remove fixed delays`
+- [x] **Step 2: Run them, expect failure.** Run: `python -m unittest tests.test_fixes.EpoBridgeTests -v`
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 5: Commit** — `Reuse the EPO client and remove fixed delays`
 
 ---
 
