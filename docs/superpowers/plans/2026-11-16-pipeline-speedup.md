@@ -483,6 +483,8 @@ def test_client_is_built_once_and_lookup_does_not_sleep(self):
 
 ### Task 6: Read patent details from the search response
 
+**Status:** Deferred on 2026-11-21. Step 1 was not run because this machine has no `EPO_KEY` or `EPO_SECRET`, so we don't yet know whether a search response includes patent details. Nothing has been built. Run Step 1 once the keys are available.
+
 One request per company instead of one plus one per patent. **This task starts with a check against the live EPO service; if the check fails, stop and report rather than build the rest.**
 
 **Files:**
