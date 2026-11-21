@@ -324,6 +324,8 @@ Decisions:
 
 ### Task 3: Validate in parallel
 
+**Status:** Done in `68bad7c`. Review approved. Minor points remain: no test has a duplicate name finishing out of order; the interrupt test raises Ctrl-C in a worker, not the main thread; the drift test only checks that fewer than six rows were saved, not that the drifting company is absent.
+
 **Files:**
 - Modify: `pipeline/orchestrator.py:348-398` (Phase 4 loop)
 - Test: `tests/test_resume.py`
@@ -336,7 +338,7 @@ Decisions:
 - `record(i, result)`: `_check_model_drift` **first** (so a row is never saved after drift), then `done[i] = result`, append the checkpoint line, and write the Excel checkpoint when `len(done) % checkpoint_interval == 0` or every company is done. The trigger is the count finished, not the row number.
 - Log `[{finished}/{total}] Phase 4 done: {name}` from `record`, replacing the per-row start line.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 class ParallelValidationTests(ResumeTestCase):
@@ -364,13 +366,13 @@ class ParallelValidationTests(ResumeTestCase):
         self.assertEqual(len(self.batches.created), 1)     # batch not resubmitted
 ```
 
-- [ ] **Step 2: Run them, expect failure.** Run: `python -m unittest tests.test_resume.ParallelValidationTests -v`
+- [x] **Step 2: Run them, expect failure.** Run: `python -m unittest tests.test_resume.ParallelValidationTests -v`
 
-- [ ] **Step 3: Implement** the Phase 4 loop with `run_indexed` over the indices not in `done`.
+- [x] **Step 3: Implement** the Phase 4 loop with `run_indexed` over the indices not in `done`.
 
-- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
 
-- [ ] **Step 5: Commit** — `Validate companies in parallel`
+- [x] **Step 5: Commit** — `Validate companies in parallel`
 
 ---
 
