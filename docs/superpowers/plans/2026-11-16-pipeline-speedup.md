@@ -220,10 +220,19 @@ Decisions:
 - `record` (main thread) does, in this order: `_check_model_drift`, append the line, emit the `"Waiting for batch"` step.
 - After Phase 1, if any record has `web_fetch_status == "error"` or an `epo.raw_status` starting with `"EPO Error"`, log one warning: `Phase 1: {n} companies have no web description because enrichment failed; {m} patent lookups failed.` Omit the half whose count is zero; log nothing when both are zero.
 - Enrichment still runs before the EPO lookup for the same company (the lookup's coherence check needs the description). The lane stays busy because other workers keep feeding it.
+- With `workers <= 1`, `_gather_one` calls `run_epo_lookup` directly and no lane thread starts (Global Constraint: one worker creates no threads). Added during the Task 2 work.
 
-- [ ] **Step 1: Pin existing tests to one worker.** In `tests/test_resume.py`, add `"concurrency": {"workers": 1}` to `CONFIG`. Add a `workers` class attribute (default `1`) to `ResumeTestCase` and have `run_pipeline` set `config["concurrency"] = {"workers": self.workers}`. Add a helper `gathered_path(self) -> str` returning `f"checkpoints/llm/gathered_{orch.load_run_state()['run_id']}.jsonl"`.
+**Status:** Done in `9bb37dc` and `9b78054`. The review approved it with minor points only:
+- The lane comment in `epo_bridge.py` still says every EPO request goes through it, which is now true only with more than one worker.
+- The interrupt test does not check that index 3 is missing from the gathered file.
+- No test covers the EPO half of the Phase 1 warning.
+- The warning is logged again on every resume.
+- After an error, workers waiting on the lane still wait for every queued lookup, so stopping can take up to about one throttled lookup per worker.
+- `lookup_in_lane` is chosen with a boolean flag rather than by passing the lookup function, so tests must patch two modules.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 1: Pin existing tests to one worker.** In `tests/test_resume.py`, add `"concurrency": {"workers": 1}` to `CONFIG`. Add a `workers` class attribute (default `1`) to `ResumeTestCase` and have `run_pipeline` set `config["concurrency"] = {"workers": self.workers}`. Add a helper `gathered_path(self) -> str` returning `f"checkpoints/llm/gathered_{orch.load_run_state()['run_id']}.jsonl"`.
+
+- [x] **Step 2: Write the failing tests**
 
 ```python
 class ParallelBatchTests(ResumeTestCase):
@@ -266,19 +275,19 @@ class LegacyGatheredFileTests(ResumeTestCase):
         self.assertEqual([r["company_name"] for r in results], ["A", "B", "C"])
 ```
 
-- [ ] **Step 3: Run them, expect failure**
+- [x] **Step 3: Run them, expect failure**
 
 Run: `python -m unittest tests.test_resume -v`
 Expected: the four new tests fail; all existing tests pass.
 
-- [ ] **Step 4: Implement** `lookup_in_lane`, `_load_gathered`, the new `_phase1_gather`, and the summary warning. Read `workers_from(config)` once in `_run_pipeline_batch`.
+- [x] **Step 4: Implement** `lookup_in_lane`, `_load_gathered`, the new `_phase1_gather`, and the summary warning. Read `workers_from(config)` once in `_run_pipeline_batch`.
 
-- [ ] **Step 5: Run all tests**
+- [x] **Step 5: Run all tests**
 
 Run: `python -m unittest discover tests`
 Expected: OK
 
-- [ ] **Step 6: Commit** — `Gather companies in parallel with one EPO lane`
+- [x] **Step 6: Commit** — `Gather companies in parallel with one EPO lane`
 
 ---
 
@@ -353,7 +362,7 @@ Decisions:
 
 - [ ] **Step 1: Keep existing batch tests on the batch path.** In `ResumeTestCase.run_pipeline`, add `"min_companies": 0` to the `batch` config, overridable by a `batch_min` argument.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 class RunModeTests(ResumeTestCase):
