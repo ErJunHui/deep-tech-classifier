@@ -19,13 +19,13 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 
-from pipeline.epo_bridge import lookup_in_lane, run_epo_lookup, EPOResult
+from pipeline.epo_bridge import run_epo_lookup, EPOResult
 from pipeline.parallel import run_indexed, workers_from
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
-from pipeline import models, progress, validation_record
+from pipeline import epo_bridge, models, progress, validation_record
 from pipeline.llm_provider import build_provider, get_cost_rates, cost_known, BATCH_DISCOUNT
 from pipeline.model_resolver import ModelSetupError
 from agents.classifier_agent import (
@@ -273,7 +273,6 @@ def _run_pipeline_batch(
     else:
         company_data_list = [gathered[i] for i in range(len(companies))]
         logger.info(f"Phase 1: Loaded {len(company_data_list)} companies from {gathered_path}")
-    _warn_gathering_failures(company_data_list)
 
     # ------------------------------------------------------------------
     # Phase 2: Agent 1 batch submission + polling
@@ -417,13 +416,13 @@ def _gather_one(
     enrichment_enabled: bool,
     provider,
     index: Optional[int] = None,
-    epo_in_lane: bool = False,
+    epo_lookup: Optional[Callable[..., EPOResult]] = None,
 ) -> Dict[str, Any]:
     """
     Run Agent 0 (web enrichment) + EPO lookup for one company → company_data dict.
 
-    epo_in_lane: run the EPO lookup on the shared EPO thread. Set it when several
-    companies are gathered at once; otherwise the lookup runs on this thread.
+    epo_lookup: what runs the EPO lookup; run_epo_lookup on this thread when None.
+    Phase 1 passes epo_bridge.lookup_in_lane when gathering with several workers.
     """
     name = company["company_name"]
     uen = company.get("uen", "")
@@ -445,7 +444,7 @@ def _gather_one(
 
     if epo_enabled and epo_key and epo_secret:
         progress.emit("step", index=index, step="Patent lookup")
-        lookup = lookup_in_lane if epo_in_lane else run_epo_lookup
+        lookup = epo_lookup or run_epo_lookup
         epo_result = lookup(
             name, epo_key, epo_secret, epo_package_dir,
             description=resolved_description, domain=domain,
@@ -505,23 +504,33 @@ def _phase1_gather(
     Each company is appended to gathered_path, with its row index, as soon as it
     is done, so an interrupted run resumes with only the companies not yet written.
     Returns the full list of company_data dicts (existing + new) in row order.
+
+    If this call gathered at least one company, logs one warning counting the
+    failed enrichments and patent lookups across every gathered record.
     """
     total = len(companies)
     result = dict(gathered)
     provider = gather_kwargs.get("provider")
+    if workers > 1:
+        gather_kwargs["epo_lookup"] = epo_bridge.lookup_in_lane
+    recorded: List[int] = []
 
     def work(i: int) -> Dict[str, Any]:
         logger.info(f"[{i+1}/{total}] Phase 1: {companies[i]['company_name']}")
-        return _gather_one(companies[i], index=i, epo_in_lane=workers > 1, **gather_kwargs)
+        return _gather_one(companies[i], index=i, **gather_kwargs)
 
     def record(i: int, company_data: Dict[str, Any]) -> None:
         _check_model_drift(provider)
         _append_jsonl({"index": i, "record": company_data}, gathered_path)
         result[i] = company_data
+        recorded.append(i)
         progress.emit("step", index=i, step="Waiting for batch")
 
     run_indexed([i for i in range(total) if i not in result], work, record, workers)
-    return [result[i] for i in range(total)]
+    company_data_list = [result[i] for i in range(total)]
+    if recorded:
+        _warn_gathering_failures(company_data_list)
+    return company_data_list
 
 
 def _load_gathered(path: str) -> Dict[int, Dict[str, Any]]:

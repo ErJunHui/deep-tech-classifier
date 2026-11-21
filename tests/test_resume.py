@@ -31,6 +31,8 @@ CONFIG = {
     "concurrency": {"workers": 1},
 }
 
+ENRICH_FAILED = {"web_description": None, "web_fetch_status": "error"}
+
 ENRICH_OK = {
     "web_description": "desc", "web_description_source": "example.com",
     "web_fetch_status": "found", "enrichment_input_tokens": 5,
@@ -143,12 +145,19 @@ class ResumeTestCase(unittest.TestCase):
     def gathered_path(self) -> str:
         return f"checkpoints/llm/gathered_{orch.load_run_state()['run_id']}.jsonl"
 
-    def run_pipeline(self, companies, resume=False, llm=None):
+    def run_pipeline(self, companies, resume=False, llm=None, epo=False):
         config = {**CONFIG, "batch": {"enabled": self.batching, "batch_poll_interval_s": 0}}
         config["llm"] = {"provider": "fake", **(llm or {})}
         config["concurrency"] = {"workers": self.workers}
         run_id = orch.load_run_state()["run_id"] if resume else None
-        return run_pipeline(companies, config, "out.xlsx", resume_run_id=run_id)
+        if not epo:
+            return run_pipeline(companies, config, "out.xlsx", resume_run_id=run_id)
+        config["epo"] = {"enabled": True}
+        with mock.patch.dict(os.environ, {"EPO_KEY": "k", "EPO_SECRET": "s"}):
+            return run_pipeline(companies, config, "out.xlsx", resume_run_id=run_id)
+
+    def phase1_warnings(self):
+        return [m for m in self.logged_messages() if m.startswith("Phase 1:")]
 
 
 class SequentialResumeTests(ResumeTestCase):
@@ -290,7 +299,9 @@ class ParallelBatchTests(ResumeTestCase):
         with self.assertRaises(KeyboardInterrupt):
             self.run_pipeline(companies)
         self.assertEqual(self.batches.created, [])
-        gathered_before = len(orch._load_gathered(self.gathered_path()))
+        gathered = orch._load_gathered(self.gathered_path())
+        self.assertNotIn(3, gathered)  # D never finished
+        gathered_before = len(gathered)
         self.assertLess(gathered_before, 8)
 
         self.enrich.reset_mock(side_effect=True)
@@ -302,28 +313,89 @@ class ParallelBatchTests(ResumeTestCase):
     def test_enrichment_failures_are_counted_in_one_warning(self):
         failed = {"B", "D"}
         self.enrich.side_effect = lambda **kw: (
-            {"web_description": None, "web_fetch_status": "error"}
-            if kw["company_name"] in failed else dict(ENRICH_OK))
+            dict(ENRICH_FAILED) if kw["company_name"] in failed else dict(ENRICH_OK))
         self.run_pipeline(_companies(list("ABCDE")))
         self.assertIn("Phase 1: 2 companies have no web description because enrichment failed.",
                       self.logged_messages())
 
 
+class PatentLookupWarningTests(ResumeTestCase):
+    batching = True
+    workers = 4
+
+    def fail_lookups_for(self, failed):
+        # With several workers the lookup runs on the EPO lane, which calls epo_bridge's.
+        def lookup(company_name, *args, **kwargs):
+            status = "EPO Error: 503" if company_name in failed else "ok"
+            return EPOResult(raw_status=status)
+
+        p = mock.patch.object(epo_bridge, "run_epo_lookup", side_effect=lookup)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_failed_patent_lookups_are_counted(self):
+        self.fail_lookups_for({"C"})
+        self.run_pipeline(_companies(list("ABCD")), epo=True)
+        self.assertEqual(self.phase1_warnings(), ["Phase 1: 1 patent lookups failed."])
+
+    def test_both_kinds_of_failure_share_one_warning(self):
+        self.fail_lookups_for({"C"})
+        self.enrich.side_effect = lambda **kw: (
+            dict(ENRICH_FAILED) if kw["company_name"] in {"A", "B"} else dict(ENRICH_OK))
+        self.run_pipeline(_companies(list("ABCD")), epo=True)
+        self.assertEqual(self.phase1_warnings(), [
+            "Phase 1: 2 companies have no web description because enrichment failed; "
+            "1 patent lookups failed."])
+
+
+class GatheringWarningOnResumeTests(ResumeTestCase):
+    batching = True
+
+    def enrich_fails_for_b(self, **kw):
+        return dict(ENRICH_FAILED if kw["company_name"] == "B" else ENRICH_OK)
+
+    def test_resume_that_gathers_counts_every_gathered_record(self):
+        companies = _companies(["A", "B", "C"])
+        self.enrich.side_effect = [dict(ENRICH_OK), dict(ENRICH_FAILED), KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies)
+        self.logged.records.clear()
+
+        self.enrich.reset_mock(side_effect=True)
+        self.enrich.return_value = dict(ENRICH_OK)
+        self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.enrich.call_count, 1)  # only C; B's failure is on disk
+        self.assertEqual(self.phase1_warnings(), [
+            "Phase 1: 1 companies have no web description because enrichment failed."])
+
+    def test_resume_that_loads_phase1_from_disk_does_not_warn_again(self):
+        companies = _companies(["A", "B", "C"])
+        self.enrich.side_effect = self.enrich_fails_for_b
+        self.run_pipeline(companies)
+        self.assertEqual(len(self.phase1_warnings()), 1)
+        self.logged.records.clear()
+
+        self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.phase1_warnings(), [])
+
+
 class EPOLaneTests(ResumeTestCase):
     """EPO lookups run on the shared "epo" thread only when gathering in parallel."""
 
-    def gather_threads(self, workers):
+    def gather_threads(self, workers, lookup_module):
+        """Gather three companies; return the thread each patent lookup ran on.
+
+        lookup_module holds the run_epo_lookup that this worker count reaches.
+        """
         threads = []
 
         def lookup(*args, **kwargs):
             threads.append(threading.current_thread().name)
             return EPOResult(raw_status="ok")
 
-        # The orchestrator's direct call and the lane's call both land here.
-        for module in (orch, epo_bridge):
-            p = mock.patch.object(module, "run_epo_lookup", side_effect=lookup)
-            p.start()
-            self.addCleanup(p.stop)
+        p = mock.patch.object(lookup_module, "run_epo_lookup", side_effect=lookup)
+        p.start()
+        self.addCleanup(p.stop)
         orch._phase1_gather(
             companies=_companies(list("ABC")), gathered={}, gathered_path="gathered.jsonl",
             workers=workers, config=CONFIG, epo_enabled=True, epo_package_dir="",
@@ -332,13 +404,11 @@ class EPOLaneTests(ResumeTestCase):
         return threads
 
     def test_one_worker_looks_up_patents_on_the_calling_thread(self):
-        with mock.patch.object(orch, "lookup_in_lane") as lane:
-            threads = self.gather_threads(workers=1)
-        lane.assert_not_called()
+        threads = self.gather_threads(workers=1, lookup_module=orch)
         self.assertEqual(threads, [threading.current_thread().name] * 3)
 
     def test_several_workers_look_up_patents_on_the_epo_thread(self):
-        threads = self.gather_threads(workers=4)
+        threads = self.gather_threads(workers=4, lookup_module=epo_bridge)
         self.assertEqual(len(threads), 3)
         self.assertTrue(all(name.startswith("epo") for name in threads), threads)
 

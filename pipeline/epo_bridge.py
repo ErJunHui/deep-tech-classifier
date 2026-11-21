@@ -107,14 +107,21 @@ def _build_epo_config(epo_key: str, epo_secret: str, epo_package_dir: str) -> Di
     }
 
 
-# Every EPO request goes through this one thread, so the EPO client's own throttler
-# sees one caller however many companies are being gathered at once. The thread is
-# started on the first lookup.
+# While companies are gathered with more than one worker, every EPO request goes
+# through this one thread, so the EPO client's own throttler sees one caller. With
+# one worker, and in the sequential pipeline, the lookup runs on the calling thread
+# and this thread is never started (it starts on the first lookup in the lane).
 _EPO_LANE = ThreadPoolExecutor(max_workers=1, thread_name_prefix="epo")
 
 
 def lookup_in_lane(*args, **kwargs) -> "EPOResult":
-    """run_epo_lookup(*args, **kwargs), run on the EPO thread; waits for the result."""
+    """
+    run_epo_lookup(*args, **kwargs), run on the EPO thread; waits for the result.
+
+    After an error or Ctrl-C, workers already waiting on the lane still wait for
+    their lookups, so stopping can take up to about one throttled EPO lookup per
+    worker. A second Ctrl-C leaves them to finish in the background.
+    """
     return _EPO_LANE.submit(run_epo_lookup, *args, **kwargs).result()
 
 
