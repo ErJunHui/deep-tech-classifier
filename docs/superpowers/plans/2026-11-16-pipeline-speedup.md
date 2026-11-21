@@ -291,6 +291,35 @@ Expected: OK
 
 ---
 
+### Task 2b: Tidy the Phase 1 review points
+
+The six minor points from the Task 2 review.
+
+**Files:**
+- Modify: `pipeline/orchestrator.py` (`_gather_one`, `_phase1_gather`, `_warn_gathering_failures` and its call sites), `pipeline/epo_bridge.py` (lane comment and `lookup_in_lane` docstring)
+- Test: `tests/test_resume.py`
+
+**Interfaces:**
+- `_gather_one` takes `epo_lookup: Optional[Callable[..., EPOResult]] = None` in place of the `epo_in_lane` flag. `None` means the orchestrator's module-level `run_epo_lookup`, looked up when called rather than bound as a default value, so tests that patch `orch.run_epo_lookup` keep working.
+- `_phase1_gather` passes `epo_bridge.lookup_in_lane` when `workers > 1` and nothing otherwise.
+- `lookup_in_lane` keeps its signature.
+
+Decisions:
+- **Lane comment.** The comment above the lane executor says the lane carries every EPO request while companies are gathered with more than one worker. With one worker, and in the sequential pipeline, the lookup runs on the calling thread.
+- **Interrupt test.** `test_interrupt_while_gathering_then_resume_gathers_only_the_rest` also asserts that index 3 ("D") is not in `orch._load_gathered(...)` after the interrupt.
+- **EPO half of the warning.** New tests: one where 1 of 4 EPO lookups returns an `EPOResult` whose `raw_status` starts with `"EPO Error"` and enrichment succeeds. It asserts `Phase 1: 1 patent lookups failed.` One where both kinds fail. It asserts `Phase 1: 2 companies have no web description because enrichment failed; 1 patent lookups failed.` Keep the existing message wording; do not change it to the singular.
+- **Warning on resume.** Log the warning only when this run gathered at least one company in Phase 1. When Phase 1 is loaded entirely from disk, it was already logged by the run that gathered it. When a resume gathers only some companies, the counts still cover every gathered record. Pin both cases with tests.
+- **Slow stop is documented, not changed.** Cancelling queued lane lookups would need a hook in `run_indexed`, which would change Task 1's contract. Add to the `lookup_in_lane` docstring: after an error or Ctrl-C, workers already waiting on the lane still wait for their lookups, so stopping can take up to about one throttled EPO lookup per worker. A second Ctrl-C leaves them to finish in the background.
+- **Flag becomes a callable.** As in Interfaces above. Simplify `EPOLaneTests` to patch only what each case actually reaches.
+
+- [ ] **Step 1: Write the new and changed tests** in `tests/test_resume.py`: index 3 absent after the interrupt, the two EPO-warning tests, and warning-on-resume (logged when the resume gathers something, not logged when Phase 1 is loaded entirely from disk).
+- [ ] **Step 2: Run them, expect failure** for the resume-without-gathering test only. Run: `python -m unittest tests.test_resume -v`
+- [ ] **Step 3: Implement** the warning condition, the `epo_lookup` parameter, the comment and the docstring.
+- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [ ] **Step 5: Commit** — `Tidy the Phase 1 gathering after review`
+
+---
+
 ### Task 3: Validate in parallel
 
 **Files:**
