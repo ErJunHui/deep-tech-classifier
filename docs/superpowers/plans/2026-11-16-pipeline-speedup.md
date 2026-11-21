@@ -573,6 +573,8 @@ def test_zero_interval_writes_at_every_checkpoint(self):
 
 ### Task 8: Estimate, documentation and a measured run
 
+**Status:** Steps 1-3 done in `da380dd`. Review approved. Steps 4-6 (the measured runs and the accuracy check) are still to do; they need live model and EPO keys. `CLASSIFY_DIRECT_SECS` stays an assumption until Step 5 measures it. Minor points remain: the estimate always assumes 8 workers whatever `concurrency.workers` says, and the docs don't mention this; the docs say EPO allows "about 5 searches per minute", but the measured 17s per company works out to about 3.5 per minute.
+
 **Files:**
 - Modify: `webapp/estimate.py:18-27`, `:80-103`, `tests/test_webapp/test_estimate.py`, `README.md`, `PROJECT_OVERVIEW.md`
 
@@ -598,7 +600,7 @@ secs     = gather + classify + validate          # workers = DEFAULT_WORKERS
 
 - Token and validated-share constants are left alone (see Out of scope).
 
-- [ ] **Step 1: Update `tests/test_webapp/test_estimate.py`** for the new duration model. Add:
+- [x] **Step 1: Update `tests/test_webapp/test_estimate.py`** for the new duration model. Add:
 
 ```python
 def test_small_run_is_not_estimated_as_a_batch(self):
@@ -609,9 +611,9 @@ def test_epo_sets_the_floor_for_large_runs(self):
     self.assertGreaterEqual(estimate(settings(epo=True), rows=5000)["secs"], 5000 * 17)
 ```
 
-- [ ] **Step 2: Run, expect failure; implement; run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 2: Run, expect failure; implement; run all tests.** Run: `python -m unittest discover tests` — Expected: OK
 
-- [ ] **Step 3: Document** in `README.md` and `PROJECT_OVERVIEW.md`: `concurrency.workers` (and that `1` is fully sequential), `batch.min_companies`, `pipeline.excel_checkpoint_min_interval_s`, and that EPO's search quota is the floor for large runs.
+- [x] **Step 3: Document** in `README.md` and `PROJECT_OVERVIEW.md`: `concurrency.workers` (and that `1` is fully sequential), `batch.min_companies`, `pipeline.excel_checkpoint_min_interval_s`, and that EPO's search quota is the floor for large runs.
 
 - [ ] **Step 4: Measured run, small.** Run the same input as the baseline (`runs/run_20261116_213044/input/companies.xlsx`) with a clean EPO cache (`lib/epo_patent/cache/`).
   Expected: about 2 minutes (baseline 614s); all four classified `general tech` as in the baseline; no `Rate limit` lines in the log. Record the phase timings in this plan.
