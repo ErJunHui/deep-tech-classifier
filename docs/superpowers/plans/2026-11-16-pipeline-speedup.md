@@ -378,6 +378,8 @@ class ParallelValidationTests(ResumeTestCase):
 
 ### Task 4: Direct classification for small runs
 
+**Status:** Done in `d1b22af`. Review approved. Parallel direct runs send patent lookups through the EPO lane; `tests/reference/check.py` now sets `batch.min_companies` to 0 so the reference check stays on the batch path. Minor points remain: a collapsed line continuation in `tests/test_resume.py`; the resume log still says "sequential" rather than "direct"; the drift test only bounds the rows saved. `build_provider` still picks a batch-capable model from `batch.enabled` alone; leave it, since changing it would change the model a small run gets.
+
 **Files:**
 - Modify: `pipeline/orchestrator.py:56-84` (`run_pipeline`), `:749-879` (direct pipeline), `config.template.json`
 - Test: `tests/test_resume.py`
@@ -393,9 +395,9 @@ Decisions:
 - When batching is enabled but the run is too small, log: `Classifying {n} companies with direct calls (batch jobs are used from {min} companies).`
 - `_run_pipeline_sequential` keeps its name and uses `run_indexed` with the same `work` / `record` split as Task 3 (`work` = `_process_one_sequential` with timing and error handling; `record` = drift check, checkpoint, Excel checkpoint by count).
 
-- [ ] **Step 1: Keep existing batch tests on the batch path.** In `ResumeTestCase.run_pipeline`, add `"min_companies": 0` to the `batch` config, overridable by a `batch_min` argument.
+- [x] **Step 1: Keep existing batch tests on the batch path.** In `ResumeTestCase.run_pipeline`, add `"min_companies": 0` to the `batch` config, overridable by a `batch_min` argument.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 class RunModeTests(ResumeTestCase):
@@ -429,13 +431,13 @@ class ParallelDirectTests(ResumeTestCase):
         self.assertEqual([r["signal_score_llm"] for r in results], [60, 61, 62, 63, 64, 65])
 ```
 
-- [ ] **Step 3: Run them, expect failure.** Run: `python -m unittest tests.test_resume -v`
+- [x] **Step 3: Run them, expect failure.** Run: `python -m unittest tests.test_resume -v`
 
-- [ ] **Step 4: Implement** the mode decision and the parallel direct pipeline.
+- [x] **Step 4: Implement** the mode decision and the parallel direct pipeline.
 
-- [ ] **Step 5: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 5: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
 
-- [ ] **Step 6: Commit** — `Classify small runs with direct calls`
+- [x] **Step 6: Commit** — `Classify small runs with direct calls`
 
 ---
 
