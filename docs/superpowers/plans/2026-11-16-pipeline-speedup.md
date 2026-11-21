@@ -362,7 +362,7 @@ Decisions:
 
 - [ ] **Step 1: Keep existing batch tests on the batch path.** In `ResumeTestCase.run_pipeline`, add `"min_companies": 0` to the `batch` config, overridable by a `batch_min` argument.
 
-- [x] **Step 2: Write the failing tests**
+- [ ] **Step 2: Write the failing tests**
 
 ```python
 class RunModeTests(ResumeTestCase):
