@@ -394,6 +394,15 @@ export function tickAllState(rows, excluded) {
 /* POST /api/runs exclude: the left-out rows of a file of rows rows, ascending. */
 export const excludeList = (excluded, rows) => [...excluded].filter((i) => i >= 0 && i < rows).sort((a, b) => a - b);
 
+/* What Start sends for draft, fixed when the request is made: exclude (the
+   POST /api/runs exclude list) and n, the companies those rows leave to
+   classify (tickedCount). Ticks changed while the request is in flight do
+   not change either. */
+export function startRequest(draft) {
+  const exclude = excludeList(draft.excluded, draft.file.table.length);
+  return { exclude, n: tickedCount(Object.assign({}, draft, { excluded: new Set(exclude) })) };
+}
+
 /* Rows the estimate is for: the ticked companies, or 20 before a file is chosen. */
 export const ESTIMATE_SAMPLE = 20;
 export const estimateRows = (draft) => (draft.file ? tickedCount(draft) : ESTIMATE_SAMPLE);

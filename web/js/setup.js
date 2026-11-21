@@ -7,7 +7,7 @@
    rendering in render/setup.js. */
 import * as api from './api.js';
 import {
-  ROW_WINDOW, newDraft, mappingForFile, startProblem, excludeList, estimateRows, tickedCount, countOf,
+  ROW_WINDOW, newDraft, mappingForFile, startProblem, startRequest, estimateRows, countOf,
 } from './model.js';
 import { S, setupShown } from './store.js';
 import { openRun, renderAll, noteSummary } from './state.js';
@@ -210,9 +210,11 @@ export async function startRun() {
   starting = true;
   dr.starting = true; dr.startError = '';
   renderSetupBar();
+  // The count announced is the one sent, also when ticks change meanwhile.
+  const { exclude, n } = startRequest(dr);
   let run;
   try {
-    run = await api.createRun(dr.file.fileId, dr.cfg, excludeList(dr.excluded, dr.file.table.length));
+    run = await api.createRun(dr.file.fileId, dr.cfg, exclude);
   } catch (e) {
     starting = false;
     dr.starting = false;
@@ -222,7 +224,6 @@ export async function startRun() {
   dr.starting = false;
   S.sessionRunIds.add(run.id);
   noteSummary(run);
-  const n = tickedCount(dr);
   const shown = S.draft === dr && setupShown();
   // The draft became this run, also when it was parked meanwhile.
   if (S.draft === dr) dropDraft();

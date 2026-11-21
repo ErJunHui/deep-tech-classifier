@@ -9,7 +9,7 @@ import {
   tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
-  durText, countOf, fileLine, noBatchText, tierPriceText,
+  durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
 } from '../js/model.js';
 
@@ -895,4 +895,15 @@ test('tierPriceText: about US$x each, under a cent, or nothing without a price',
   assert.equal(tierPriceText(0.0031), 'under US$0.01 each');
   assert.equal(tierPriceText(null), '');
   assert.equal(tierPriceText(undefined), '');
+});
+test('startRequest: the exclude list sent and its count, unchanged by later ticks', () => {
+  const draft = named([2, 0]);
+  const req = startRequest(draft);
+  assert.deepEqual(req, { exclude: [0, 2], n: 0 });
+  const d2 = named([0]);
+  const r2 = startRequest(d2);
+  assert.deepEqual(r2, { exclude: [0], n: 1 }); // row 1 has a blank name
+  d2.excluded.add(2); // ticked out while the request is in flight
+  assert.deepEqual(r2, { exclude: [0], n: 1 });
+  assert.deepEqual(startRequest(named([])), { exclude: [], n: 2 });
 });
