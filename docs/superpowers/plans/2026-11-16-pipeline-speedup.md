@@ -542,15 +542,17 @@ def test_search_cache_key_differs_with_and_without_constituents(self): ...
 
 ### Task 7: Stop rewriting the Excel checkpoint every ten companies
 
+**Status:** Done in `8842a16`. Review approved. Step 1 measured 13.8s for one 5,000-row `write_incremental` call, so the task went ahead. With the default setting, `out.xlsx` now lags the JSONL checkpoint by up to 60s during a run. Minor points remain: `checkpoint_interval: 0` still divides by zero, as it did before; the tests cover only the 3600s and 0s settings, not a checkpoint written once the interval has passed.
+
 The whole workbook is rewritten every `checkpoint_interval` (10) companies: 500 rewrites over a 5,000-company run, each larger than the last. The cost has not been measured, so measure first.
 
 **Files:**
 - Modify: `pipeline/orchestrator.py` (the two `record` functions from Tasks 3 and 4), `config.template.json`
 - Test: `tests/test_resume.py`
 
-- [ ] **Step 1: Measure.** Time one `data.writer.write_incremental` call for 5,000 rows built with `_error_result`-shaped results. **If it takes under 0.5s, skip this task** and note the figure here.
+- [x] **Step 1: Measure.** Time one `data.writer.write_incremental` call for 5,000 rows built with `_error_result`-shaped results. **If it takes under 0.5s, skip this task** and note the figure here.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 ```python
 def test_excel_checkpoints_are_rate_limited_but_the_last_one_is_always_written(self):
@@ -562,10 +564,10 @@ def test_zero_interval_writes_at_every_checkpoint(self):
     self.assertEqual(write.call_count, 3)
 ```
 
-- [ ] **Step 3: Implement.** New setting `pipeline.excel_checkpoint_min_interval_s`, default `60` in code and in `config.template.json`. A checkpoint that is due is skipped when the previous one (or the start of the phase) was less than that many seconds ago. The write after the last company always happens. The JSONL checkpoint, which is what resume and the web app read, is unaffected.
+- [x] **Step 3: Implement.** New setting `pipeline.excel_checkpoint_min_interval_s`, default `60` in code and in `config.template.json`. A checkpoint that is due is skipped when the previous one (or the start of the phase) was less than that many seconds ago. The write after the last company always happens. The JSONL checkpoint, which is what resume and the web app read, is unaffected.
 
-- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
-- [ ] **Step 5: Commit** — `Rate-limit Excel checkpoints`
+- [x] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 5: Commit** — `Rate-limit Excel checkpoints`
 
 ---
 
