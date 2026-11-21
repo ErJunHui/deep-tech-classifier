@@ -37,6 +37,17 @@ def run_indexed(
     workers <= 1 runs inline, in the given order. If work or record raises anything
     (KeyboardInterrupt included), work not yet started is cancelled, work already
     running is left to finish with its result discarded, and the exception is re-raised.
+
+    record is called in completion order, not index order. If several results come back
+    together and one of them is an error, the ones before it in that batch may already
+    have been recorded; no index is ever recorded twice. Callers must place results by
+    index, never by the order of record calls.
+
+    Ctrl-C:
+    - A Ctrl-C on the calling thread while it waits is handled like an error in work.
+    - On Windows, the wait may not see the Ctrl-C until the next company finishes.
+    - A second Ctrl-C during the cleanup wait leaves the running workers to finish in
+      the background. Their results are discarded.
     """
     if workers <= 1:
         for i in indices:

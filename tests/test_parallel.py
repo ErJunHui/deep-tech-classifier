@@ -4,7 +4,9 @@ import sys
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -50,6 +52,94 @@ class RunIndexedTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "drift"):
             run_indexed(range(10), lambda i: i, record, workers=4)
         self.assertEqual(len(recorded), 1)
+
+
+def _executor_that_opens(gate):
+    """A ThreadPoolExecutor whose shutdown cancels queued work, then opens gate, then waits.
+
+    Work that blocks on gate cannot finish, and so cannot free its worker for the next
+    queued index, until run_indexed has shut the pool down. That makes the number of
+    work calls after an error exact rather than a matter of timing.
+    """
+    class GatedExecutor(ThreadPoolExecutor):
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            super().shutdown(wait=False, cancel_futures=cancel_futures)
+            gate.set()
+            if wait:
+                super().shutdown(wait=True)
+    return GatedExecutor
+
+
+class RunIndexedCancellationTests(unittest.TestCase):
+    """20 indices, 2 workers, index 0 raises. Every other index blocks until shutdown."""
+
+    def run_until_index_0_fails(self):
+        gate = threading.Event()
+        lock = threading.Lock()
+        self.calls = 0
+        self.started, self.finished, self.recorded = set(), set(), []
+
+        def work(i):
+            with lock:
+                self.calls += 1
+                self.started.add(i)
+            try:
+                if i == 0:
+                    raise RuntimeError("boom")
+                gate.wait(timeout=5)  # safety net only; shutdown opens the gate
+                time.sleep(0.05)      # still running for a while after the gate opens
+                return i
+            finally:
+                with lock:
+                    self.finished.add(i)
+
+        with mock.patch("pipeline.parallel.ThreadPoolExecutor", _executor_that_opens(gate)):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                run_indexed(range(20), work, lambda i, r: self.recorded.append(i), workers=2)
+            # taken straight after the raise, before anything else can finish
+            with lock:
+                self.started_at_raise = set(self.started)
+                self.finished_at_raise = set(self.finished)
+
+    def test_queued_work_is_cancelled(self):
+        self.run_until_index_0_fails()
+        self.assertLessEqual(self.calls, 4)
+
+    def test_running_work_has_finished_when_the_error_is_raised(self):
+        self.run_until_index_0_fails()
+        self.assertEqual(self.started_at_raise, self.finished_at_raise)
+
+    def test_record_is_never_called_after_the_error(self):
+        self.run_until_index_0_fails()
+        self.assertEqual(self.recorded, [])
+
+
+class RunIndexedThreadingTests(unittest.TestCase):
+    def test_work_runs_off_the_calling_thread_with_several_workers(self):
+        work_threads = set()
+        lock = threading.Lock()
+        def work(i):
+            with lock:
+                work_threads.add(threading.get_ident())
+            return i
+        run_indexed(range(8), work, lambda i, r: None, workers=4)
+        self.assertTrue(work_threads)
+        self.assertNotIn(threading.get_ident(), work_threads)
+
+    def test_error_mid_batch_records_no_index_twice_and_is_raised(self):
+        # all four start together and finish together, so several futures can come
+        # back from the same wait call with index 2's error among them
+        barrier = threading.Barrier(4, timeout=5)
+        recorded = []
+        def work(i):
+            barrier.wait()
+            if i == 2:
+                raise RuntimeError("mid-batch")
+            return i
+        with self.assertRaisesRegex(RuntimeError, "mid-batch"):
+            run_indexed(range(4), work, lambda i, r: recorded.append(i), workers=4)
+        self.assertEqual(len(recorded), len(set(recorded)))
+        self.assertLessEqual(set(recorded), {0, 1, 3})
 
 
 class WorkersFromTests(unittest.TestCase):
