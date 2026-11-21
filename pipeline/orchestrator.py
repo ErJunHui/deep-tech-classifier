@@ -21,7 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from pipeline.epo_bridge import run_epo_lookup, EPOResult
+from pipeline.epo_bridge import lookup_in_lane, EPOResult
+from pipeline.parallel import run_indexed, workers_from
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
 from pipeline import models, progress, validation_record
@@ -220,6 +221,7 @@ def _run_pipeline_batch(
 
     epo_key = os.getenv("EPO_KEY")
     epo_secret = os.getenv("EPO_SECRET")
+    workers = workers_from(config)
 
     _rates = _rates_for(provider)
 
@@ -244,18 +246,21 @@ def _run_pipeline_batch(
     # ------------------------------------------------------------------
     # Phase 1: Data gathering (enrichment + EPO)
     # ------------------------------------------------------------------
-    company_data_list = _load_jsonl(gathered_path) if Path(gathered_path).exists() else []
+    gathered = _load_gathered(gathered_path) if Path(gathered_path).exists() else {}
     _check_alignment(
-        {i: cd.get("company_name") for i, cd in enumerate(company_data_list)},
+        {i: cd.get("company_name") for i, cd in gathered.items()},
         companies, gathered_path,
     )
-    if len(company_data_list) < len(companies):
+    if len(gathered) < len(companies):
         logger.info(
             f"=== Phase 1: Data Gathering (enrichment + EPO) — "
-            f"{len(company_data_list)}/{len(companies)} already gathered ==="
+            f"{len(gathered)}/{len(companies)} already gathered ==="
         )
         company_data_list = _phase1_gather(
             companies=companies,
+            gathered=gathered,
+            gathered_path=gathered_path,
+            workers=workers,
             config=config,
             epo_enabled=epo_enabled,
             epo_package_dir=epo_package_dir,
@@ -263,12 +268,12 @@ def _run_pipeline_batch(
             epo_secret=epo_secret,
             enrichment_enabled=enrichment_enabled,
             provider=provider,
-            gathered=company_data_list,
-            gathered_path=gathered_path,
         )
         logger.info(f"Phase 1 complete. Gathered {len(company_data_list)} companies → {gathered_path}")
     else:
+        company_data_list = [gathered[i] for i in range(len(companies))]
         logger.info(f"Phase 1: Loaded {len(company_data_list)} companies from {gathered_path}")
+    _warn_gathering_failures(company_data_list)
 
     # ------------------------------------------------------------------
     # Phase 2: Agent 1 batch submission + polling
@@ -434,7 +439,7 @@ def _gather_one(
 
     if epo_enabled and epo_key and epo_secret:
         progress.emit("step", index=index, step="Patent lookup")
-        epo_result = run_epo_lookup(
+        epo_result = lookup_in_lane(
             name, epo_key, epo_secret, epo_package_dir,
             description=resolved_description, domain=domain,
         )
@@ -481,29 +486,67 @@ def _classify_online(cd: Dict[str, Any], config: Dict[str, Any], provider) -> Di
 
 
 def _phase1_gather(
-    companies, gathered, gathered_path, **gather_kwargs,
+    companies: List[Dict[str, Any]],
+    gathered: Dict[int, Dict[str, Any]],
+    gathered_path: str,
+    workers: int,
+    **gather_kwargs,
 ) -> List[Dict[str, Any]]:
     """
-    Gather every company not yet in `gathered`.
+    Gather every company not yet in `gathered`, up to `workers` at a time.
 
-    Each company is appended to gathered_path as soon as it is done, so an
-    interrupted run resumes from the next company instead of starting over.
-    Returns the full list of company_data dicts (existing + new).
+    Each company is appended to gathered_path, with its row index, as soon as it
+    is done, so an interrupted run resumes with only the companies not yet written.
+    Returns the full list of company_data dicts (existing + new) in row order.
     """
     total = len(companies)
-    result = list(gathered)
+    result = dict(gathered)
+    provider = gather_kwargs.get("provider")
 
-    for i, company in enumerate(companies):
-        if i < len(result):
-            continue
-        logger.info(f"[{i+1}/{total}] Phase 1: {company['company_name']}")
-        record = _gather_one(company, index=i, **gather_kwargs)
-        _check_model_drift(gather_kwargs.get("provider"))
-        _append_jsonl(record, gathered_path)
-        result.append(record)
+    def work(i: int) -> Dict[str, Any]:
+        logger.info(f"[{i+1}/{total}] Phase 1: {companies[i]['company_name']}")
+        return _gather_one(companies[i], index=i, **gather_kwargs)
+
+    def record(i: int, company_data: Dict[str, Any]) -> None:
+        _check_model_drift(provider)
+        _append_jsonl({"index": i, "record": company_data}, gathered_path)
+        result[i] = company_data
         progress.emit("step", index=i, step="Waiting for batch")
 
-    return result
+    run_indexed([i for i in range(total) if i not in result], work, record, workers)
+    return [result[i] for i in range(total)]
+
+
+def _load_gathered(path: str) -> Dict[int, Dict[str, Any]]:
+    """
+    Load a gathered file as {row index: company_data}.
+
+    Lines are {"index": i, "record": company_data}. Older runs wrote bare
+    company_data lines in row order; such a line takes its line number as its index.
+    """
+    gathered: Dict[int, Dict[str, Any]] = {}
+    for n, line in enumerate(_load_jsonl(path)):
+        if "record" in line:
+            gathered[int(line["index"])] = line["record"]
+        else:
+            gathered[n] = line
+    return gathered
+
+
+def _warn_gathering_failures(company_data_list: List[Dict[str, Any]]) -> None:
+    """Log one warning counting companies whose enrichment or patent lookup failed."""
+    no_description = sum(1 for cd in company_data_list if cd.get("web_fetch_status") == "error")
+    epo_failed = sum(
+        1 for cd in company_data_list
+        if str((cd.get("epo") or {}).get("raw_status", "")).startswith("EPO Error")
+    )
+    parts = []
+    if no_description:
+        parts.append(f"{no_description} companies have no web description because enrichment failed")
+    if epo_failed:
+        parts.append(f"{epo_failed} patent lookups failed")
+    if parts:
+        logger.warning(f"Phase 1: {'; '.join(parts)}.")
 
 
 def _phase3_parse(

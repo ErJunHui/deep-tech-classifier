@@ -10,6 +10,7 @@ import re
 import sys
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
@@ -104,6 +105,17 @@ def _build_epo_config(epo_key: str, epo_secret: str, epo_package_dir: str) -> Di
             "fuzzy_matching_algorithm": "token_sort_ratio",
         },
     }
+
+
+# Every EPO request goes through this one thread, so the EPO client's own throttler
+# sees one caller however many companies are being gathered at once. The thread is
+# started on the first lookup.
+_EPO_LANE = ThreadPoolExecutor(max_workers=1, thread_name_prefix="epo")
+
+
+def lookup_in_lane(*args, **kwargs) -> "EPOResult":
+    """run_epo_lookup(*args, **kwargs), run on the EPO thread; waits for the result."""
+    return _EPO_LANE.submit(run_epo_lookup, *args, **kwargs).result()
 
 
 def run_epo_lookup(

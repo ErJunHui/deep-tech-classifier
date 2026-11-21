@@ -7,6 +7,8 @@ import logging
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +27,7 @@ CONFIG = {
     "validation": {"validator_enabled": False},
     "epo": {"enabled": False},
     "enrichment": {"enabled": True},
+    "concurrency": {"workers": 1},
 }
 
 ENRICH_OK = {
@@ -89,6 +92,7 @@ class _Records(logging.Handler):
 
 class ResumeTestCase(unittest.TestCase):
     batching = False
+    workers = 1
 
     def setUp(self):
         # The pipeline's warnings (model not reference-checked, missing
@@ -135,9 +139,13 @@ class ResumeTestCase(unittest.TestCase):
     def logged_messages(self):
         return [record.getMessage() for record in self.logged.records]
 
+    def gathered_path(self) -> str:
+        return f"checkpoints/llm/gathered_{orch.load_run_state()['run_id']}.jsonl"
+
     def run_pipeline(self, companies, resume=False, llm=None):
         config = {**CONFIG, "batch": {"enabled": self.batching, "batch_poll_interval_s": 0}}
         config["llm"] = {"provider": "fake", **(llm or {})}
+        config["concurrency"] = {"workers": self.workers}
         run_id = orch.load_run_state()["run_id"] if resume else None
         return run_pipeline(companies, config, "out.xlsx", resume_run_id=run_id)
 
@@ -237,6 +245,89 @@ class BatchResumeTests(ResumeTestCase):
         self.assertEqual(self.enrich.call_count, 0)
         self.assertEqual(len(self.batches.created), 1)
         self.assertEqual(first, second)
+
+
+class ParallelBatchTests(ResumeTestCase):
+    batching = True
+    workers = 4
+
+    def test_out_of_order_gathering_keeps_rows_aligned(self):
+        names = ["A", "Dup", "Dup", "D", "E", "F"]
+        delays = dict(zip(range(6), (0.06, 0.05, 0.04, 0.03, 0.02, 0.01)))
+        companies = _companies(names)
+        for i, company in enumerate(companies):
+            company["uen"] = str(i)  # tells the two "Dup" rows apart
+
+        lock, running, most_running = threading.Lock(), [0], [0]
+
+        def enrich(**kw):
+            i = int(kw["uen"])
+            with lock:
+                running[0] += 1
+                most_running[0] = max(most_running[0], running[0])
+            time.sleep(delays[i])  # later rows finish first
+            with lock:
+                running[0] -= 1
+            return {**ENRICH_OK, "web_description": f"desc {i}"}
+
+        self.enrich.side_effect = enrich
+        results = self.run_pipeline(companies)
+        self.assertGreater(most_running[0], 1)  # companies were gathered side by side
+        self.assertEqual([r["company_name"] for r in results], names)
+        self.assertEqual([r["web_description"] for r in results], [f"desc {i}" for i in range(6)])
+
+    def test_interrupt_while_gathering_then_resume_gathers_only_the_rest(self):
+        companies = _companies(list("ABCDEFGH"))
+
+        def enrich(**kw):
+            if kw["company_name"] == "D":
+                time.sleep(0.05)  # other rows keep finishing meanwhile
+                raise KeyboardInterrupt()
+            return dict(ENRICH_OK)
+
+        self.enrich.side_effect = enrich
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies)
+        self.assertEqual(self.batches.created, [])
+        gathered_before = len(orch._load_gathered(self.gathered_path()))
+        self.assertLess(gathered_before, 8)
+
+        self.enrich.reset_mock(side_effect=True)
+        self.enrich.return_value = dict(ENRICH_OK)
+        results = self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.enrich.call_count, 8 - gathered_before)
+        self.assertEqual([r["company_name"] for r in results], list("ABCDEFGH"))
+
+    def test_enrichment_failures_are_counted_in_one_warning(self):
+        failed = {"B", "D"}
+        self.enrich.side_effect = lambda **kw: (
+            {"web_description": None, "web_fetch_status": "error"}
+            if kw["company_name"] in failed else dict(ENRICH_OK))
+        self.run_pipeline(_companies(list("ABCDE")))
+        self.assertIn("Phase 1: 2 companies have no web description because enrichment failed.",
+                      self.logged_messages())
+
+
+class LegacyGatheredFileTests(ResumeTestCase):
+    batching = True
+
+    def test_positional_gathered_file_from_an_older_run_is_resumed(self):
+        companies = _companies(["A", "B", "C"])
+        self.enrich.side_effect = [dict(ENRICH_OK), dict(ENRICH_OK), KeyboardInterrupt()]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies)
+
+        # Older runs wrote one bare company record per line, in row order.
+        path = self.gathered_path()
+        lines = orch._load_jsonl(path)
+        self.assertEqual(len(lines), 2)
+        orch._save_jsonl([line["record"] for line in lines], path)
+
+        self.enrich.reset_mock(side_effect=True)
+        self.enrich.return_value = dict(ENRICH_OK)
+        results = self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.enrich.call_count, 1)  # only C
+        self.assertEqual([r["company_name"] for r in results], ["A", "B", "C"])
 
 
 class ModelLockTests(ResumeTestCase):
