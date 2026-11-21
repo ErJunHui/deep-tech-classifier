@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -94,10 +95,16 @@ class ValidationRecordTests(unittest.TestCase):
 
 class CostLabelTests(unittest.TestCase):
     def test_unlisted_model_has_no_borrowed_price(self):
-        for model in ("claude-haiku-9", "gemini-2.5-flash-lite", "gpt-4o-mini-audio"):
-            rates = llm_provider.get_cost_rates(model)
-            self.assertFalse(llm_provider.cost_known(rates), model)
-            self.assertEqual(rates["input"], 0.0)
+        names = ("claude-haiku-9", "gemini-2.5-flash-lite", "gpt-4o-mini-audio")
+        # A fresh "already warned" set: the warning is given once per process.
+        with mock.patch.object(llm_provider, "_warned_unpriced", set()),                 self.assertLogs("pipeline.llm_provider", "WARNING") as logs:
+            for model in names:
+                rates = llm_provider.get_cost_rates(model)
+                self.assertFalse(llm_provider.cost_known(rates), model)
+                self.assertEqual(rates["input"], 0.0)
+        self.assertEqual(len(logs.records), len(names))
+        for model, message in zip(names, logs.output):
+            self.assertIn(f"No price is listed for model '{model}'", message)
 
     def test_dated_snapshots_use_their_base_price(self):
         self.assertTrue(llm_provider.cost_known(llm_provider.get_cost_rates("claude-haiku-4-5-20251001")))

@@ -31,7 +31,7 @@ The prototype simulates things the real app has to do differently. These are dec
 1. **No "summary" runs.** The prototype's `kind: 'summary'` runs ("rows were not kept in this workspace", `archiveHtml`, `runDetailHtml`, `buildSummaryOps`) are not built. Every run the app lists has its rows. Runs started from the CLI are not listed.
 2. **"Use sample file" becomes "Choose file…".** The drop zone uploads the real file; the button opens a file picker.
 3. **Two statuses the prototype lacks.** `interrupted` (the server restarted or the pipeline process died while running) behaves like `stopped`. `failed` (the pipeline exited with a fatal error such as a bad key or a resume mismatch) shows the status pill "Failed", the pipeline's `[FATAL]` message in the `wb-notice` block, and a Resume button.
-4. **Error rows.** A company whose `classification` is `error` shows "Error" in the verdict cell, `—` for confidence, criteria and risk, action "Needs Review", and cannot be decided. It is counted in a new `errors` count (shown as a sub-line under "Processed": `N errors · retried on resume`), not in deep/general. Resume is offered on a complete run that has error rows.
+4. **Error rows.** A company whose `classification` is `error` shows "Error" in the verdict cell, `—` for confidence, criteria and risk, action "Needs Review", and cannot be decided. Its patents and cost cells show the real value when the result has one, otherwise `—`. It is counted in a new `errors` count (shown as a sub-line under "Processed": `N errors · retried on resume`), not in deep/general. Resume is offered on a complete run that has error rows.
 
 ## Review Focus
 
@@ -501,6 +501,114 @@ def test_batch_false_for_non_anthropic(self)
 - [ ] **Step 4: Run** — expected: pass.
 - [ ] **Step 5: Commit** — "Add the pre-run cost and duration estimate".
 
+### Task 9c: Estimate follow-ups from the Task 9 review
+
+Task 9 (`cac1f80`) and Task 9b (`4d2527d`) are done. Their independent review left three issues open; this task closes them. Each part is its own commit and can be done or dropped on its own. Tests live in `tests/test_webapp/` (the Task 3 ruling), so every command here is `tests.test_webapp.…`.
+
+**Status (2026-11-14):** Part 1 is done (`7245b63`). Part 2 is done (`203f9a6`), but `ESTIMATE_PRICE_AS` is empty: no Google page states what the three Gemini `-latest` aliases point to today, so every Gemini estimate is still "unknown" (see Open decision 7). Part 3 is **not done and is parked**; see "Part 3 status" below and Open decisions 8 to 10. `search_model_for` and the orchestrator changes listed under Interfaces do not exist yet.
+
+**Files:**
+- Modify: `webapp/estimate.py`, `pipeline/models.py`, `pipeline/llm_provider.py`, `pipeline/orchestrator.py`
+- Test: `tests/test_webapp/test_estimate.py`, `tests/test_models.py`, `tests/test_fixes.py`
+
+**Interfaces:**
+- Produces: `estimate_request(body: Any) -> dict` and `EstimateError(ValueError)` in `webapp/estimate.py`. It takes the raw JSON body of `POST /api/estimate`, runs `body["settings"]` through `clean_settings` and returns `estimate(settings, rows)`. It raises `EstimateError` with a readable message when the body is not an object, the provider or tier is unknown (the `ValueError` from `clean_settings`, re-raised), or `rows` is anything but a non-negative whole number (`bool`, `None`, a string, a negative, a non-finite float and a float with a fraction are all rejected; `12.0` is accepted as 12). Missing `settings` means defaults; missing `rows` is an error. Task 10 calls this and maps `EstimateError` → 400.
+- Changes the estimate dict: two keys are added, `"pricedAs": str | None` and `"pinned": bool`. `pinned` is true when the model came from the pin (by `models.pinned_model`). `pricedAs` is the model whose prices were used when that is not `model` itself, else `None`. Tasks 10, 12 and 14 pass these through.
+- Produces in `pipeline/models.py`: `ESTIMATE_PRICE_AS: Dict[str, str]` (moving alias → the priced version it points to today) and `search_model_for(provider: str, model: str) -> str` (the model that runs web-search calls: `OPENAI_SEARCH_CANDIDATES[0]` for `openai`, otherwise `model`).
+
+#### Part 1 — Reject bad estimate requests (review Minor 3)
+
+Today `estimate` raises `KeyError`, `TypeError`, `AttributeError`, `ValueError` or `OverflowError` on input that skipped `clean_settings` or on a bad `rows`; from an HTTP handler each is a 500. `estimate` itself keeps its contract (settings from `clean_settings`, `rows` an int); the new `estimate_request` is the only entry point the API uses.
+
+- [ ] **Step 1: Write the failing tests** in `tests/test_webapp/test_estimate.py`
+
+```python
+def test_request_with_defaults_and_rows(self)          # {"rows": 20} -> same dict as estimate(clean_settings({}), 20)
+def test_request_cleans_settings(self)                 # {"settings": {"validatorThreshold": 999}, "rows": 5} -> threshold clamped, no error
+def test_request_rejects_bad_rows(self)                # None, "5", "abc", True, -1, 2.7, float("inf"), float("nan"), missing -> EstimateError
+def test_request_accepts_whole_float_rows(self)        # 12.0 -> 12
+def test_request_rejects_unknown_provider_and_tier(self)  # EstimateError carrying clean_settings' message
+def test_request_rejects_non_object_body(self)         # None, [], "x" -> EstimateError
+```
+
+- [ ] **Step 2: Run** `python -m unittest tests.test_webapp.test_estimate -v` — expected: the six new tests fail.
+- [ ] **Step 3: Implement** `EstimateError` and `estimate_request`.
+- [ ] **Step 4: Run** — expected: pass.
+- [ ] **Step 5: Commit** — "Validate estimate requests before estimating".
+
+#### Part 2 — Estimate for a tier that is a moving alias (review P1)
+
+Every Gemini tier in `CANDIDATES` is a `-latest` alias with no price, so every Gemini estimate is "unknown", and the prototype's fallback text (`Pinned model is not priced in pipeline/models.py…`, `workbench.js:2224`) is wrong when nothing is pinned. The run itself is priced afterwards by the version the API reports (`orchestrator._rates_for`).
+
+Decision made here (see Open decision 7): the estimate, and only the estimate, prices an alias by the version it points to today, and says so. The pipeline's rule that a run never borrows another model's rates is unchanged: `get_cost_rates` is not touched.
+
+- `ESTIMATE_PRICE_AS` maps each alias in `CANDIDATES` that has no profile to a model that is in `COST_RATES`. Fill it from the provider's model page at implementation time. If the current target has no profile yet, add one with prices read from the provider's pricing page; if a price cannot be confirmed, leave that alias out and it stays unknown. Never copy a neighbouring model's price.
+- In `estimate`: when `model` is unpriced and `ESTIMATE_PRICE_AS` has it, use the mapped model's rates, set `known` true and `pricedAs` to the mapped model. A pinned model is never mapped (`pricedAs` stays `None` for it even if its name is an alias key; a pin is a statement about an exact model).
+- The comment on `ESTIMATE_PRICE_AS` says it is for estimates only and must be re-checked whenever `CANDIDATES` changes.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+# tests/test_models.py
+def test_estimate_price_as_keys_are_unpriced_candidates_and_values_are_priced(self)
+    # every key is in some CANDIDATES list and has no profile; every value is in COST_RATES
+# tests/test_webapp/test_estimate.py
+def test_alias_tier_is_priced_as_its_current_version(self)   # for each (provider, tier) whose first candidate is in ESTIMATE_PRICE_AS:
+                                                             # known True, model is the alias, pricedAs the mapped model, classify part uses the mapped rates
+def test_priced_model_has_no_priced_as(self)                 # anthropic fast -> pricedAs None, pinned False
+def test_pinned_alias_is_not_mapped(self)                    # model pinned to an alias key -> known False, pricedAs None, pinned True
+def test_pinned_flag(self)                                   # "my-finetune" -> pinned True; "null" -> pinned False
+def test_get_cost_rates_still_does_not_price_an_alias(self)  # get_cost_rates(alias, warn=False) is unknown
+```
+
+- [ ] **Step 2: Run** both test modules — expected: fail.
+- [ ] **Step 3: Implement.** Update `test_result_shape_and_tier_model` for the two new keys.
+- [ ] **Step 4: Run** `python -m unittest discover -s tests` — expected: pass.
+- [ ] **Step 5: Commit** — "Estimate a moving-alias tier by the version it points to".
+
+#### Part 3 — Price OpenAI web-search calls by the model that runs them (review P3)
+
+On OpenAI, enrichment and validation run on the dedicated search model (`OPENAI_SEARCH_CANDIDATES`, `llm_provider.py:650-670`), but `orchestrator.py:664-683` prices their tokens at the main model's rates and the search model has no `web_search` fee listed. With the fast tier the search tokens are priced at the small model's rate, far below what is billed. Both the run's reported cost and the estimate are low. This part changes the cost the pipeline reports for OpenAI runs (CLI included); nothing changes for Anthropic or Gemini (see Open decision 8).
+
+**Part 3 status (2026-11-14): parked, no code written.** Step 1 was carried out and found three things the steps below did not allow for. The steps are kept as written; read them with the findings and decisions here.
+
+Findings:
+
+1. **The search model no longer exists.** OpenAI's model page marks `gpt-4o-search-preview` "Shut down", and the web-search guide says the preview search models were shut down on 2026-07-23. `resolve_openai_search_model` (`pipeline/model_resolver.py:107-117`) tries only `OPENAI_SEARCH_CANDIDATES` and raises `ModelSetupError` when none is served, so every OpenAI run should now fail at setup. This is from reading the code; it has not been run against the API.
+2. **The search fee could not be confirmed.** The model's token prices ($2.50 in, $10.00 out per 1M) match the existing profile. The pricing page does not list the search-preview models, and its "Web search preview (other models), $25.00 / 1k calls" row does not say it covers them.
+3. **The token columns mix two models.** `OpenAIProvider.complete_with_search` (`pipeline/llm_provider.py:689-708`) can follow the search-model call with a JSON follow-up call on the main model, and adds that call's tokens into the same `input_tokens` / `output_tokens`. Both agents pass `force_json_prompt`, so this can happen in enrichment and in validation. `searches` is always 1. Nothing records whether the follow-up ran, so the enrichment and validator columns cannot be split after the fact.
+
+Decisions made:
+
+- **Part 3 waits for a working OpenAI search model.** Replacing the shut-down candidate is its own task (Open decision 9) and comes first; nothing is priced against a model that cannot run.
+- **Record the split, do not guess it** (for finding 3). `LLMResponse` gains two fields, default 0, giving how many of its input and output tokens ran on the main model; `input_tokens` / `output_tokens` stay totals. Only OpenAI's `complete_with_search` sets them. The two agents pass them through as extra result keys on every path that already records tokens (this adds `agents/enrichment_agent.py` and `agents/validator_agent.py` to the file list). The orchestrator prices (total − main share) at the search model's rates, the main share at the main model's rates, and searches × the search model's fee. A result without the new keys (an older checkpoint) counts as 0 main-model tokens. Existing token columns and the workbook do not change.
+- **The run is priced by the model that ran.** `_search_rates_for(provider)` uses the provider's existing `search_model_name` property (no new attribute is needed; Step 4's wording predates this) and falls back to the main model's rates when it is `None`. The estimate uses `models.search_model_for`.
+- **A priced main model with an unpriced search model** gives `total_cost_usd` `None` when any search-model tokens or searches were recorded for the company. The estimate's `known` still follows the classifier model.
+- **No remembered or inferred prices.** The search model's token prices and per-call fee come from OpenAI's pricing page, with the URL and date in a comment and the commit message. If the fee for the chosen model cannot be confirmed, Part 3 stops again.
+
+Extra tests when this is picked up: the OpenAI cost test includes a non-zero main-model share for at least one step and checks the three-way split; a provider test that `complete_with_search` with a follow-up reports the follow-up's tokens in the new fields and the totals as before (fake client); a test that a result lacking the new keys is priced as all-search. `test_anthropic_cost_is_unchanged` is written and passing before the orchestrator is touched, so the pinned number is the old one.
+
+- [ ] **Step 1: Read first.** Confirm from `agents/enrichment_agent.py`, `agents/validator_agent.py` and the OpenAI provider which calls go to the search model and what `searches` count the provider returns for them. Read the search model's current token prices and per-call search fee from OpenAI's pricing page. Record what you found in the commit message. If the validator makes some calls on the main model, price only the search-model tokens at the search rates and say how they are told apart; if they cannot be told apart from the recorded token columns, stop and report rather than guess.
+- [ ] **Step 2: Write the failing tests**
+
+```python
+# tests/test_models.py
+def test_search_model_for(self)            # openai -> OPENAI_SEARCH_CANDIDATES[0]; anthropic and gemini -> the model passed in
+def test_openai_search_model_has_a_search_fee(self)   # COST_RATES[search model] has "web_search" > 0
+# tests/test_fixes.py — cost of one company on a fake OpenAI provider with known token counts
+def test_openai_search_tokens_are_priced_at_the_search_model(self)
+    # classifier tokens at the main model's rates; enrichment and validator tokens at the search model's; searches x the search model's fee
+def test_anthropic_cost_is_unchanged(self)   # same inputs, anthropic model -> the same total as before this task (pin the number)
+def test_unpriced_main_model_is_still_unknown(self)   # total_cost_usd None even when the search model is priced
+# tests/test_webapp/test_estimate.py
+def test_openai_search_parts_use_the_search_model(self)   # openai fast: enrich and validate parts computed from search_model_for's rates and fee; classify from the tier model
+```
+
+- [ ] **Step 3: Run** — expected: fail.
+- [ ] **Step 4: Implement.** In `orchestrator`, a `_search_rates_for(provider)` beside `_rates_for`, used for the enrichment and validator terms; the provider exposes its search model by a public attribute rather than `_search_model`. A run whose main model is unpriced stays `None`. In `estimate`, `_search_step_cost` takes the rates of `models.search_model_for(provider, model)`; `known` still follows the classifier model. One rule, in `pipeline/models.py`, for which model runs a search call.
+- [ ] **Step 5: Run** `python -m unittest discover -s tests` — expected: pass.
+- [ ] **Step 6: Commit** — "Price OpenAI web-search calls by the search model".
+
 ### Task 10: HTTP API and entry point
 
 **Files:**
@@ -515,7 +623,7 @@ def test_batch_false_for_non_anthropic(self)
 |---|---|
 | `GET /api/setup` | → `setup_info(os.environ)` |
 | `POST /api/files` | multipart `file` → inspect dict; `UploadError` → 400 `{"detail": message}` |
-| `POST /api/estimate` | `{"settings", "rows"}` → estimate dict |
+| `POST /api/estimate` | `{"settings", "rows"}` → estimate dict, by `estimate_request(body)` (Task 9c); `EstimateError` → 400 `{"detail": message}` |
 | `GET /api/runs` | → `[RunSummary]`, newest first |
 | `POST /api/runs` | `{"fileId", "settings", "exclude": [int]}` → 201 RunSummary. `exclude` lists 0-based data-row indexes the reviewer unticked in the setup table (optional, default `[]`); `RunStore.create` writes `input/<file>` without those rows (same format, same headers), so the pipeline, resume and `total` see only the ticked companies. 400 when the company-name mapping is missing or not a header of the file, the provider's key is not set (`<KEYVAR> is not set in .env`), an index is out of range, or every row is excluded (`Tick at least one company to start`) |
 | `GET /api/runs/{id}` | → `{"run": RunSummary, "rows": [Row], "cursor": int}` |
@@ -570,7 +678,7 @@ The frontend is a port of `workbench.js` into modules, with the simulation remov
 - Produces from `web/js/model.js` (ES module, no DOM access):
   - Formatters, copied in behaviour from `workbench.js:550-570`: `esc`, `clamp`, `pad`, `money`, `fmtDur`, `confWord`, `signed`, `flip`, `vLabel`, `vLow`, `actionFor`, `hhmm(date)`, `dateLabel(iso, now)` (`Today, 08:42` for today, otherwise `2 Nov 2026`).
   - `currentDecision(history)` — same rule as the server.
-  - `rowView(row, total, decisionOverride?) -> {row, r, idx, dec, error, flagged, open, verdict, reclassified, confirmed, action}` — `workbench.js:690`, plus `error: true` rows: `flagged false`, `open false`, `action 'Needs Review'`, `verdict null`.
+  - `rowView(row, decisionOverride?) -> {row, r, idx, dec, error, flagged, open, verdict, reclassified, confirmed, action}` — `workbench.js:690`, plus `error: true` rows: `flagged false`, `open false`, `action 'Needs Review'`, `verdict null`.
   - `counts(rows) -> {total, done, deep, general, errors, open, confirmed, reclassified, cost, costUnknown, avg, risk}` — `workbench.js:703`; error rows add to `done` and `errors` only.
   - `newFilters()`, `anyFilter(f)`, `computeIds(rows, {filters, sortKey, sortDir, running, snapshot}) -> number[]` — `workbench.js:863`, including the rule that priority sort falls back to input order while running, and that sorting uses the decision snapshot. Error rows sort after flagged rows and before clear rows in priority order, and match no risk/verdict/status/bin filter.
   - `formProblem(view, form)`, `needsNote(view, choice)` — `workbench.js:1205`.
@@ -646,6 +754,56 @@ Create a run with `curl` (upload `tests/reference/companies.xlsx`, then `POST /a
 - [ ] **Step 4: Run** `node --test web/tests/` and `python -m unittest discover tests` — expected: pass.
 - [ ] **Step 5: Commit** — "Show runs and live results in the workbench".
 
+### Task 12 and 12b: status, open items and what is not yet verified
+
+Recorded 2026-11-15. Task 12 landed as `ef6bd8d` and `ec8f9d7`; Task 12b (the eight minors from the Task 12 review) as `61a9b0f`. Both were reviewed and approved with no Critical or Important findings. At `61a9b0f`: `node --test "web/tests/**/*.test.js"` 69/69, `python -m unittest discover tests` 269 OK.
+
+**As built, where it differs from the Task 12 text above**
+
+- Step 1's command does not work as written. The fake pipeline path must be absolute (the pipeline starts in the run folder), it lives in `tests/test_webapp/`, and the server needs some `ANTHROPIC_API_KEY` in its environment or `POST /api/runs` returns 400. Working form: `$env:DTC_PIPELINE_CMD = '["python", "<repo>/tests/test_webapp/fake_classify.py"]'; $env:FAKE_DELAY_S = '0.4'; $env:ANTHROPIC_API_KEY = '<any placeholder>'; python serve.py`.
+- `make_big_input.py` is at `tests/test_webapp/make_big_input.py` and writes to `tests/test_webapp/out/` (git-ignored).
+- Table rows carry `data-row` (the prototype's attribute), not `data-i`.
+- `S` and `resumable` live in a new leaf module `web/js/store.js`, re-exported by `state.js`. Modules under `web/js/render/` import from `store.js` and never from `state.js`.
+- Added beyond the file list: `viewKey`, `mergeChanges` in `model.js`; `S.limit`, `S.viewKey`; the `show-more` / `show-all` actions; `tableNotice` in `store.js`; `createPoller` in `state.js`; `web/tests/live.test.js`.
+- The detail panel hook for Task 13 is `setDetailRenderer(fn)` / `renderDetail(opts)` / `detailSig()` in `state.js`. The side column is empty until then.
+- Two table states the prototype has no copy for (wording is new): `Can’t reach the server` when the run list cannot be loaded, and `Couldn’t open this run` with the server's message.
+- The rail shows the model id exactly as reported (the prototype's `claude-` prefix strip is gone), cut with an ellipsis.
+- `web/styles.css` Additions block now also holds the table footer row, `.wb-stat-s.is-wrap` and the rail ellipsis rule.
+
+**Open items (not fixed)**
+
+1. The `N errors · retried on resume` line under "Processed" wraps to three lines inside the stat, and the strip is 110 px tall instead of 63 px on any run with error rows. It was made to wrap so the histogram stays on the first row at a 1440 px window; a shorter line or a different place for it would avoid the extra height.
+2. A NumberFlow file that loads but then throws while running is not guarded; only a file that fails to load falls back to plain text. Seen only in jsdom, which lacks `getAnimations`.
+3. With all 5,000 rows shown (after `End` or `Show all`), the one-off render took 738 ms and one poll took 59 ms, over the 50 ms target. With the default 200-row window no poll exceeded 50 ms.
+4. A click on a run that fails to open shows a toast on every click. Only the automatic 5-second retry is limited to one toast.
+5. After a stale run-list answer is dropped, the next list refresh can be up to 5 seconds late (`state.js`, `lastList` set before the freshness check).
+6. A `/api/setup` request that hangs rather than fails still stalls polling; no fetch has a timeout.
+7. `createPoller` could move out of `state.js` into its own module; `state.js` grew by about 120 lines in 12b.
+8. Carried from Task 11b and visible in this table: error rows sort first under verdict-ascending.
+
+**Not covered by automated tests**
+
+- The poll tick as a whole: dropping stale answers before `applyChanges` / `applyRunList`, the separate setup retry, the `openRun` token and the open-error path. The scheduler (`createPoller`) and the pure helpers are unit-tested; the wiring was checked by hand in jsdom only.
+- Every DOM module: `render/rail.js`, `head.js`, `strip.js`, `chips.js`, `table.js`, `toast.js`, `counter.js` (except `fmtCounter`), `events.js`, `main.js`. The node tests cover `model.js`, `store.js`, `fmtCounter`, `detailText` and the poller only.
+- `tests/test_webapp/make_big_input.py` (run by hand once, 5,000 rows).
+
+**Checked in a browser** (headless Edge 157 driven over the DevTools protocol, 1440×900, fake pipeline, sequential mode; Chrome and Playwright were not available)
+
+Empty state; a live run landing rows in input order with per-row steps; counters updating; Stop and Resume by the `S` key with their toasts and no flip back to "Running"; the completion toast and re-sort into review-priority order; keys `J K ↑ ↓ Home End N ⇧N A F / S`; every sort column, chip, stat button, two histogram bins and search; plain-text counters with the vendored file blocked; the 5,000-row window, footer, `Show 200 more`, `End`, and search for row 4,800; error-row cells; the rail ellipsis; "Can’t reach the server" at load and recovery; one "Lost contact with the server" toast then "Reconnected". No console errors or warnings in any of these.
+
+**Not yet observed**
+
+- The counter roll animation itself, and that switching runs sets the numbers without rolling. The `<number-flow>` elements were present and showed the right values; the motion was not watched.
+- Behaviour with the OS set to reduce motion.
+- The row landing animation as motion (the class was applied; it was not watched).
+- A failed run and an interrupted run in a real browser: the "Failed" / "Interrupted" pills, the failed dot, the `wb-notice` text. Checked in jsdom only, which has no layout.
+- "Couldn’t open this run" in a real browser (jsdom only).
+- Scroll smoothness on a long table, and the poll cost in the browser's Performance panel. Poll cost was measured with a long-task observer instead.
+- The `Show all` button itself (`End` rendered all 5,000 rows; the button was not clicked).
+- A batch-mode run: the steps `Waiting for batch`, `In batch job`, `Validation queued` and the batch phase line were never on screen.
+- A run with Contested or Uncertain rows, or with a real cost: the fake pipeline produces only Clear, Escalate and error rows at US$0.00.
+- Any browser other than Edge 157, any window size other than 1440×900, and the real pipeline (Task 16).
+
 ### Task 13: Evidence panel and decisions
 
 **Files:**
@@ -687,7 +845,7 @@ The design was chosen in a prototype round on 2026-11-13 ("In the table"; see `d
   - **Action bar**, right-aligned under the table: `Classify <n> companies · ~US$<cost> · about <m> min` and the batch note. When `startProblem` returns text the button keeps its place, shows the reason, and clicking it focuses the fix (column chip, header checkbox, or the provider in the analyst sheet). `Cancel` (and `Esc` when no menu is open) returns to the previously open run.
   - **Settings popover** (`Settings: <level> ▾`): three quality levels in plain words, mapped to tiers, with the model id as secondary text from `S.setup`; the four steps as switches with one plain sentence each; an `Analyst settings` link.
   - **Analyst sheet**: provider with key status and `Ask your admin to add <KEYVAR> to .env`, tier, pinned model with the `S.setup.pricedModels` hint, batch, the six thresholds with reset, and the estimate. It traps focus and closes on `Esc`, returning focus to the link.
-  - Estimate from `postEstimate(draft, ticked rows or 20)`, debounced 250 ms after any change; while a request is in flight the previous numbers stay; the note says `rough estimate`.
+  - Estimate from `postEstimate(draft, ticked rows or 20)`, debounced 250 ms after any change; while a request is in flight the previous numbers stay; the note says `rough estimate`. From Task 9c: when `pricedAs` is set the note adds `priced as <pricedAs>; the run is priced by the version the API reports`. When `known` is false the cost reads `unknown`, the split bar is hidden, and the line under it is `Pinned model is not priced in pipeline/models.py; token totals will be reported instead.` when `pinned` is true, otherwise `<model> has no listed price; the cost is shown after the run if the API reports a priced version.`
   - Start: `createRun(file.fileId, settings, [...excluded])`, adds the id to `sessionRunIds`, clears `S.draft`, opens the run (the same table now shows live rows) and focuses Stop. A 400 is shown in the action bar.
   - Events: `new-run`, `rerun`, `cancel-setup`, `clear-file`, `col-menu`, `map`, `tick-row`, `tick-all`, `settings-pop`, `analyst-open`, `analyst-close`, `reset-th`, `start`, provider/tier/toggle/number/model inputs, drag-over/leave/drop, key `O`.
 
@@ -695,6 +853,62 @@ The design was chosen in a prototype round on 2026-11-13 ("In the table"; see `d
 - [ ] **Step 2: Verify in the browser against the fake pipeline** — expected: dropping `tests/reference/companies.xlsx` lists all its rows as `Queued` with the detected columns; choosing `Not mapped` for Company name highlights the header and the button reads `Map the company name column to start`, and clicking it opens that column menu; unticking two rows updates the count and estimate, unticking all reads `Tick at least one company to start`; dropping a `.txt` shows the server's rejection; a provider with no key blocks Start and points to the analyst sheet; Start creates a run whose `total` is the ticked count, and its rows go from Queued to steps to verdicts in place; "Same settings…" opens setup with those settings and no file; `Cancel` returns to the previous run; the analyst sheet traps Tab and `Esc` closes it, returning focus.
 - [ ] **Step 3: Run** both test suites — expected: pass.
 - [ ] **Step 4: Commit** — "Add new-run setup in the results table".
+
+### Task 14b: Open items from the Task 14 review
+
+Recorded 2026-11-16. Task 14 landed as `48bb8af` and its fix round as `afbb0e5` (draft kept when another run is opened, no duplicate run on Start, setup left alone by the list poll, a failed estimate shown as `estimate unavailable`). Both were reviewed; no Critical or Important finding is open. At `afbb0e5`: `node --test "web/tests/**/*.test.js"` 105/105, `python -m unittest discover tests` 269 OK. The items below are the minor findings and open questions left over. Nothing here changes copy, keys or layout except where an item says so.
+
+**As built, where it differs from the Task 14 text above**
+
+- The draft is `S.draft = {file, cfg, excluded}`: the run's Settings sit under `draft.cfg`.
+- Whether setup is on screen is `setupShown(S)` in `web/js/store.js` (`S.draft && S.showSetup`). A draft can be parked behind a run: opening a run from the rail hides setup and keeps the draft, the rail's draft item (`open-draft`) and `+ New run` return to it, and Cancel or Start ends it. This is the prototype's behaviour; the sentence "While `S.draft` is set the main column shows setup" describes the screen, not the state.
+- The Company name column menu offers `Don’t use a column` (the prototype offers it for optional fields only), so the "Not mapped" check in Step 2 can be done.
+- "Same settings…" re-detects a field that had no column in the old run, as well as fields whose column is missing from the new file.
+- Pure setup rules (`mappingForFile`, chip states, `tickAllState`, `classifyLabel`, `draftRailLine`, the estimate notes) are in `model.js` with node tests; the plan asked for none.
+
+**Files**
+- Modify: `web/js/state.js`, `web/js/events.js`, `web/js/model.js`, `web/js/render/rail.js`, `web/js/render/setup.js`, `web/js/render/analyst.js`
+- Create: `web/js/setup.js` (item 9)
+- Modify for item 11 only: `webapp/settings_map.py`, `tests/test_webapp/` (the setup-info test)
+- Test: `web/tests/model.test.js`, `web/tests/live.test.js`
+
+**Starting a run**
+
+1. **The old run is live while the new one loads.** On Start, the previously open run (or the no-run notice) is painted and takes keys while the `GET` for the new run is in flight, so `S` could stop the old run. If that `GET` fails, the code still announces "Run started" and focuses the old run's Stop button (`state.js` `startRun`). Fix: show the new run's own loading state, or keep global run keys off until it has opened; announce and move focus only when the open succeeded, and show the failure otherwise.
+2. **A draft parked during Start vanishes without a word.** If the user opens another run while the Start `POST` is in flight, the run is created and the draft is used up, but only the rail changes. Fix: toast `Run started: <file>` with the new run in the rail, and leave the user on the run they chose.
+3. **Cancel or `Esc` during the Start `POST` does not stop the run being created.** Fix: ignore Cancel and `Esc` while the request is in flight (the button already shows it is working), or keep the draft until the answer arrives. Do not try to cancel the request: the server may already have started the run.
+4. **Start is not blocked while a replacement file is uploading.** With a file loaded, dropping another and pressing Start before `Reading <name>…` finishes starts the run on the old file. Fix: `startProblem` (or the Start handler) treats `draft.reading` as blocking, with the button reading `Reading <name>…`.
+5. **Stop and Resume rebuild the setup.** `stopActive` and `resumeActive` call `renderAll()` after their await; if setup was opened in the meantime the whole setup is rebuilt once. Fix: use the same rail-only render the list poll uses while `setupShown()`.
+
+**Wording and small rules**
+
+6. **`1 companies`.** The rail's draft line (`draftRailLine`) and any other count of companies must read `1 company`. Check the Start button label and the file line as well.
+7. **Duration text is made by slicing.** `classifyLabel` uses `fmtDur(est.secs).slice(1)` to drop the leading `~`. Fix: give `fmtDur` a way to return the bare duration, or add a small helper, so the label does not depend on another formatter's first character.
+8. **No provider supports batch.** `noBatchText` produces `Only  supports batch jobs` when the list of batch-capable providers is empty. Fix: with none, say `Batch jobs are not available`.
+9. **File size.** `state.js` is 489 lines and `events.js` about 450, each roughly 200 lines larger than before Task 14. Move the setup controller (`openSetup`, `showRun`'s setup half, `cancelSetup`, `loadFile`, `clearFile`, `setupChanged`, the estimate request, `startRun`, and their module state) into `web/js/setup.js`, the way decisions moved to `decisions.js` in 13b. `state.js` must not import it; `events.js` imports the setup actions from it. No behaviour change from the move.
+
+**Needs a decision before work starts**
+
+10. **Copy: "Nothing is sent anywhere until you start the run".** Kept from the prototype, but the file is now uploaded to the local server (`127.0.0.1`) and saved under `uploads/` as soon as it is dropped. Proposed: `Nothing is sent to an AI provider until you start the run.` Alternative: keep the prototype's sentence, since nothing leaves the machine.
+11. **Per-tier price in the settings popover.** The prototype shows `~$x each` beside each quality level; it was left out because `GET /api/setup` has no per-tier price. Proposed: add `costPerCompany` (a number, or `null` when the tier's model has no listed price) to each tier in `setup_info`, computed by the same code the estimate uses for one company with the default settings, and show `~US$0.03 each` or nothing when `null`. Alternative: leave the price out and rely on the estimate in the action bar.
+
+**Not yet observed in a browser**
+
+- The layout at a 1024 px wide window (UX requirement N14). All checks so far ran at 1440 px or wider.
+- A real drag of a file from the desktop. Drops were simulated events carrying a real `File`; the file picker was used for real.
+- The 5-second list poll leaving setup untouched when no run exists, checked by the implementer only.
+- The states the implementer reports and the controller did not repeat: `Used twice` and unmapped column chips, unticking every row, a `.txt` rejection, a provider with no key, the analyst sheet's focus trap, and the 5,000-row setup window.
+
+**Steps**
+
+- [x] **Step 1: Write the failing tests** for the pure parts: `1 company` in `draftRailLine` and the Start label (item 6); the bare duration (item 7); `noBatchText` with no batch provider (item 8); `startProblem` while a file is being read (item 4); and, if item 11 is approved, the tier price text for a number and for `null`, plus a Python test that every tier in `setup_info` carries `costPerCompany`.
+- [x] **Step 2: Run** `node --test "web/tests/**/*.test.js"` — expected: the new tests fail.
+- [x] **Step 3: Implement** items 1–9, and 10–11 as decided.
+- [ ] **Step 4: Verify in the browser against the fake pipeline** — expected: with the new run's `GET` delayed, `S` during the wait does not stop the previously open run, and with that `GET` failing there is no "Run started" announcement; opening another run during a delayed Start shows the `Run started` toast and stays on the chosen run; `Esc` during a delayed Start does not leave a run nobody sees; Start during a delayed replacement upload reads `Reading <name>…` and starts nothing; pressing `S` on a running run and opening setup before it answers does not rebuild the setup; a one-row file reads `1 company` in the rail and on the button; the Task 14 Step 2 checks still pass. Then the items under "Not yet observed": resize the window to 1024 px and go through setup, and drag a real file from the desktop.
+- [x] **Step 5: Run** both test suites — expected: pass.
+- [x] **Step 6: Commit** — "Tidy new-run setup after its review".
+
+**Status (2026-11-21).** Done in `039e677` (item 9: the setup controller is now `web/js/setup.js`), `629a78b` (items 1–8, 10, 11) and `f52d3d8` (the Start count is taken from the rows sent). Each was reviewed with no Critical or Important finding open. Tests: node 126/126, Python 270 OK. Item 10 took the proposed copy and item 11 the proposed per-tier price; `costPerCompany` is a map per provider keyed by tier, beside `tiers`, because `tiers` stays tier → model id. Step 4 ran in a headless browser against the fake pipeline, including setup at 1024 px; a real drag of a file from the desktop is still to do. Copy added that the prototype lacks: `Starting…`, `Opening the run…`, `Start is available once the file has been read.`, the toast body `Classifying <n> companies. It is in the rail under This session.`, `Batch jobs are not available.` and `under US$0.01 each`. Seen and left alone: the rail's Command menu button is clipped at 1024 px; `events.js` is still about 480 lines (the setup handlers stay there).
 
 ### Task 15: Command menu, shortcuts sheet, reading view, divider, download
 
@@ -736,3 +950,7 @@ These are choices this plan makes that you may want to overrule before work star
 4. **No build step and no framework on the frontend.** The prototype is plain JS and ports directly. The cost is hand-written DOM rendering staying as string templates. Of the libraries considered (Emil Kowalski's curated list), only NumberFlow is used, because it works as a web component without a framework. base-ui (popovers, menus, sheets), cmdk (command menu), Sonner (toasts) and Virtuoso (long tables) are React-only; adopting them means moving Tasks 11–15 to React with Vite. The long-table window in Task 12 stands in for Virtuoso.
 5. **Estimate constants are assumptions** until Task 16 calibrates them against a real run.
 6. **CLI runs are not shown in the app**, and the prototype's "results are in the workbook" archive view is dropped with them.
+7. **A moving-alias tier is estimated at today's version's price** (Task 9c, Part 2), shown as `priced as <model>`. The table can go stale when the provider repoints the alias. The alternative is no estimate for those tiers, only a line saying the cost is shown after the run; that needs just the `pinned` key and the wording in Task 14. **As built (2026-11-14) the table is empty**, because no Google page states the aliases' current targets: the code path exists but every Gemini estimate is still "unknown". Either supply the targets (and their prices) from a source you trust, or take the alternative.
+8. **OpenAI runs will report a higher cost than before** (Task 9c, Part 3), because web-search calls are priced by the search model and its per-search fee. This changes a number the CLI prints and writes to the workbook, which the first Global Constraint otherwise forbids; it is a correction, not a behaviour change. The alternative is to leave the pipeline alone and note in the UI that OpenAI search costs are not included. **Not built yet:** Part 3 is parked behind decision 9, so until then OpenAI estimates and reported run costs stay low.
+9. **The OpenAI search model has been shut down and needs a replacement** (found in Task 9c, Part 3). `OPENAI_SEARCH_CANDIDATES` holds only `gpt-4o-search-preview`, which OpenAI shut down on 2026-07-23, so OpenAI runs should fail at setup (not yet confirmed by a real run). OpenAI's guide names two routes: `gpt-5-search-api` on Chat Completions (the smaller change; the pricing page lists its token prices, and its per-call fee still has to be confirmed), or the Responses API `web_search` tool on the main model (no separate search model, so no token split to record, but a larger change to the provider). Neither has been run through this pipeline, and the project's rule is that a model joins a candidate list only after it has. This is a new task, outside this plan's web-app scope; until it is done the app should not be relied on for OpenAI runs. Task 10 does not depend on it.
+10. **Part 3 records which tokens ran on which model instead of approximating** (Task 9c, "Part 3 status"). It adds two fields to `LLMResponse` and extra result keys in the two search agents, which the original Part 3 file list did not include. The alternatives were to price all search-step tokens at the search model's rate as an upper bound, or to drop Part 3. If decision 9 goes the Responses API route, the split is not needed and this decision falls away.

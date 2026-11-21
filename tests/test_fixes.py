@@ -109,8 +109,11 @@ class CostTests(unittest.TestCase):
             "content": [{"type": "text", "text": '{"classification": "deep tech", "confidence": 80}'}],
             "usage": {"input_tokens": 1_000_000, "output_tokens": 1_000_000},
         }}}]
-        out = orch._phase3_parse(raw, [{}], {}, provider=None, rates=rates)
+        with self.assertLogs("agents.classifier_agent", "WARNING") as logs:
+            out = orch._phase3_parse(raw, [{}], {}, provider=None, rates=rates)
         self.assertAlmostEqual(out["0"]["classifier_cost_usd"], 3.00)
+        # The canned answer has no criteria, and the parser says so.
+        self.assertIn("WARNING:agents.classifier_agent:criteria.innovation missing 'met' field", logs.output)
 
     def test_gemini_thinking_tokens_count_as_output(self):
         provider = llm_provider.GeminiProvider.__new__(llm_provider.GeminiProvider)
@@ -186,12 +189,16 @@ class AnthropicSearchTests(unittest.TestCase):
     def test_search_errors_are_retried_and_surface_as_provider_errors(self):
         req = mock.Mock()
         err = anthropic.APIConnectionError(request=req)
-        with mock.patch.object(llm_provider.time, "sleep"):
+        with mock.patch.object(llm_provider.time, "sleep"),                 self.assertLogs("pipeline.llm_provider", "WARNING") as logs:
             ok = self.provider([err, _message([{"type": "text", "text": '{"ok": 1}'}])])
             self.assertEqual(self.search(ok)[0].text, '{"ok": 1}')
             bad = self.provider([err, err, err])
             with self.assertRaises(llm_provider.ProviderConnectionError):
                 self.search(bad)
+        # Each retry is logged; the last attempt raises instead.
+        self.assertEqual([r.getMessage().split(":")[0] for r in logs.records],
+                         ["API connection error (attempt 1/3)", "API connection error (attempt 1/3)",
+                          "API connection error (attempt 2/3)"])
 
 
 if __name__ == "__main__":

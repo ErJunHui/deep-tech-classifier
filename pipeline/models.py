@@ -135,6 +135,22 @@ COST_RATES: Dict[str, Dict[str, float]] = {
     name: profile.rates for name, profile in PROFILES.items() if profile.rates is not None
 }
 
+# FOR PRE-RUN ESTIMATES ONLY: a moving alias in CANDIDATES that has no price ->
+# the priced version it points to today. A run is never priced this way: it is
+# priced by the version the API reports (llm_provider.get_cost_rates never
+# reads this table). Re-check every entry whenever CANDIDATES changes or the
+# provider repoints an alias; an alias whose target cannot be confirmed from
+# the provider's own pages stays out, and its estimate shows as unknown.
+#
+# Empty as of 2026-11-14: no Google page states the current target of
+# gemini-flash-lite-latest, gemini-flash-latest or gemini-pro-latest. The
+# changelog's last alias entry (2026-01-21) points flash and pro at Gemini 3
+# previews, and several newer versions have shipped since:
+#   https://aistudio.google.com/docs/changelog
+#   https://aistudio.google.com/docs/models
+#   https://aistudio.google.com/api-reference/interactions-api
+ESTIMATE_PRICE_AS: Dict[str, str] = {}
+
 # Anthropic snapshots end in -YYYYMMDD, OpenAI snapshots in -YYYY-MM-DD.
 _DATED_SNAPSHOT = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})$")
 

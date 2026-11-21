@@ -3,6 +3,7 @@ Resume / checkpoint regression tests. No network or API keys needed:
     python -m unittest discover tests
 """
 
+import logging
 import os
 import sys
 import tempfile
@@ -75,10 +76,32 @@ class _FakeBatches:
             yield SimpleNamespace(model_dump=lambda p=payload: p)
 
 
+class _Records(logging.Handler):
+    """Keeps the warnings and errors logged during a test."""
+
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
 class ResumeTestCase(unittest.TestCase):
     batching = False
 
     def setUp(self):
+        # The pipeline's warnings (model not reference-checked, missing
+        # criteria, checkpoint not found...) go here instead of stderr, for
+        # the tests to assert on.
+        self.logged = _Records()
+        for name in ("pipeline", "agents"):
+            parent = logging.getLogger(name)
+            parent.addHandler(self.logged)
+            self.addCleanup(parent.removeHandler, self.logged)
+            quiet = mock.patch.object(parent, "propagate", False)
+            quiet.start()
+            self.addCleanup(quiet.stop)
         self._cwd = os.getcwd()
         self._tmp = tempfile.TemporaryDirectory()
         os.chdir(self._tmp.name)
@@ -108,6 +131,9 @@ class ResumeTestCase(unittest.TestCase):
     def tearDown(self):
         os.chdir(self._cwd)
         self._tmp.cleanup()
+
+    def logged_messages(self):
+        return [record.getMessage() for record in self.logged.records]
 
     def run_pipeline(self, companies, resume=False, llm=None):
         config = {**CONFIG, "batch": {"enabled": self.batching, "batch_poll_interval_s": 0}}
@@ -144,6 +170,7 @@ class SequentialResumeTests(ResumeTestCase):
         self.classify.side_effect = [_agent1(), RuntimeError("boom"), _agent1()]
         results = self.run_pipeline(companies)
         self.assertEqual([r["classification"] for r in results], ["general tech", "error", "general tech"])
+        self.assertIn("Unhandled error processing 'B': boom", self.logged_messages())
 
         self.classify.reset_mock(side_effect=True)
         self.classify.side_effect = lambda **kw: _agent1()
@@ -179,6 +206,7 @@ class SequentialResumeTests(ResumeTestCase):
             f.write('{"index": 1, "result": {"compa')
         _, results = load_partial_results(companies)
         self.assertEqual(len(results), 2)
+        self.assertIn(f"Dropping incomplete last line of {path} (interrupted write).", self.logged_messages())
 
 
 class BatchResumeTests(ResumeTestCase):
@@ -226,6 +254,9 @@ class ModelLockTests(ResumeTestCase):
             "search_model": None, "source": "tier", "tier": "fast",
         })
         self.assertEqual([r["model"] for r in results], ["fake-v1", "fake-v1"])
+        self.assertIn("No fake model has passed the reference check yet. "
+                      "Run `python -m tests.reference.check` to confirm 'fake-v1' classifies as expected.",
+                      self.logged_messages())
         self.assertIsNone(self.build.call_args.kwargs["model"])  # fresh run resolves
 
     def test_resume_reuses_the_checkpointed_model(self):

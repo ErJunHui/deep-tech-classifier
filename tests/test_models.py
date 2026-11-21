@@ -29,6 +29,18 @@ class RegistryTests(unittest.TestCase):
                     self.assertIn(model, models.PROFILES)
                     self.assertIsNotNone(models.PROFILES[model].rates, model)
 
+    def test_estimate_price_as_keys_are_unpriced_candidates_and_values_are_priced(self):
+        candidates = {
+            model
+            for tiers in models.CANDIDATES.values()
+            for candidate_list in tiers.values()
+            for model in candidate_list
+        }
+        for alias, priced in models.ESTIMATE_PRICE_AS.items():
+            self.assertIn(alias, candidates)
+            self.assertFalse(models.has_profile(alias), alias)
+            self.assertIn(priced, models.COST_RATES, alias)
+
 
 class RequestParamsTests(unittest.TestCase):
     def test_older_and_unknown_models_keep_the_original_request_shape(self):

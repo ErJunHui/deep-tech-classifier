@@ -731,18 +731,21 @@ BATCH_DISCOUNT = 0.5
 _warned_unpriced: set = set()
 
 
-def get_cost_rates(model: str) -> Dict[str, Any]:
+def get_cost_rates(model: str, warn: bool = True) -> Dict[str, Any]:
     """
     Cost rates for a model (USD per token).
 
     Only the exact model, or a dated snapshot of it, is priced. Any other model
     gets models.UNKNOWN_RATES: another model's rates are never borrowed, because
     prices differ by 10x within a family.
+
+    An unpriced model is logged once per process. Pass warn=False to look up
+    rates for a model that may never run (a pre-run estimate).
     """
     rates = COST_RATES.get(model) or COST_RATES.get(models.base_model_id(model))
     if rates is not None:
         return rates
-    if model not in _warned_unpriced:
+    if warn and model not in _warned_unpriced:
         _warned_unpriced.add(model)
         logger.warning(
             f"No price is listed for model '{model}' in pipeline/models.py. "

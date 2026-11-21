@@ -141,6 +141,23 @@ class SettingsMapTest(unittest.TestCase):
         self.assertEqual(info["pricedModels"], sorted(models.COST_RATES))
         self.assertEqual(info["defaults"], DEFAULT_SETTINGS)
 
+    def test_setup_tiers_carry_cost_per_company(self):
+        # The price of one company at the default settings for each tier, by
+        # the same code as POST /api/estimate; None when it has no listed price.
+        from webapp.estimate import estimate
+
+        for p in setup_info({})["providers"]:
+            self.assertEqual(set(p["costPerCompany"]), set(models.TIERS))
+            for tier in models.TIERS:
+                cost = p["costPerCompany"][tier]
+                expected = estimate(clean_settings({"provider": p["id"], "tier": tier, "model": ""}), 1)
+                if expected["known"]:
+                    self.assertIsInstance(cost, float)
+                    self.assertGreater(cost, 0)
+                    self.assertAlmostEqual(cost, expected["cost"])
+                else:
+                    self.assertIsNone(cost)
+
     def test_provider_key_vars_match_pipeline(self):
         # pipeline/settings.py checks each key in if/elif code, so the table to
         # compare against is llm_provider._PROVIDERS (id -> (key var, class)); it

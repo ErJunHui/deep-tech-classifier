@@ -19,6 +19,8 @@ from webapp.files import (  # noqa: E402
     inspect,
     resolve,
     save_upload,
+    too_large_message,
+    write_without_rows,
 )
 
 
@@ -233,6 +235,15 @@ class FilesTest(unittest.TestCase):
         self.assert_rejected("a.csv", b"x" * (MAX_UPLOAD_BYTES + 1), "20 MB")
         self.assertEqual(MAX_UPLOAD_BYTES, 20 * 1024 * 1024)
 
+    def test_too_large_message_follows_the_limit(self):
+        self.assertEqual(too_large_message(), "The file is larger than 20 MB. Please upload a smaller spreadsheet.")
+        with self.assertRaises(UploadError) as ctx:
+            save_upload(self.uploads, "a.csv", b"x" * (MAX_UPLOAD_BYTES + 1))
+        self.assertEqual(str(ctx.exception), too_large_message())
+        with mock.patch("webapp.files.MAX_UPLOAD_BYTES", 1000):
+            self.assertEqual(too_large_message(),
+                             "The file is larger than 1,000 bytes. Please upload a smaller spreadsheet.")
+
     def test_blank_and_duplicate_headers_survive(self):
         rows = [["Company", None, "Company", "About"], ["A", "x", "B", "d"], ["C", "y", "D", None]]
         info = save_upload(self.uploads, "dupes.xlsx", _xlsx(rows))
@@ -265,6 +276,73 @@ class FilesTest(unittest.TestCase):
         (self.uploads / empty_id).mkdir()
         with self.assertRaises(FileNotFoundError):
             resolve(self.uploads, empty_id)
+
+
+CSV = "Company,About,Sector,UEN\nAlpha,Quantum sensors,Hardware,U1\nBeta,,Biotech,U2\nGamma,Lasers,Photonics,U3\n"
+
+
+class WriteWithoutRowsTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = Path(tmp.name)
+        self.source = self.tmp / "companies.csv"
+        self.source.write_text(CSV, encoding="utf-8")
+        self.dest = self.tmp / "out" / "companies.csv"
+        self.dest.parent.mkdir()
+
+    def test_empty_or_missing_exclude_copies_byte_for_byte(self):
+        for exclude in ([], None):
+            with self.subTest(exclude=exclude):
+                write_without_rows(self.source, self.dest, exclude)
+                self.assertEqual(self.dest.read_bytes(), self.source.read_bytes())
+
+    def test_csv_rows_left_out(self):
+        write_without_rows(self.source, self.dest, [1, 1])
+        self.assertEqual(self.dest.read_text(encoding="utf-8").splitlines(),
+                         ["Company,About,Sector,UEN", "Alpha,Quantum sensors,Hardware,U1", "Gamma,Lasers,Photonics,U3"])
+
+    def test_xlsx_rows_left_out_and_formula_like_text_kept(self):
+        from openpyxl import load_workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Company", "About", "Sector", "UEN"])
+        ws.append(["Alpha", "=1+1", "Hardware", "U1"])
+        ws.append(["Beta", None, "Biotech", "U2"])
+        ws.append(["Gamma", "Lasers", "Photonics", "U3"])
+        ws["B2"].data_type = "s"  # text that looks like a formula
+        source = self.tmp / "companies.xlsx"
+        wb.save(source)
+        dest = self.tmp / "out" / "companies.xlsx"
+        write_without_rows(source, dest, [2, 1])
+        out = load_workbook(dest).active
+        self.assertEqual([[c.value for c in row] for row in out.iter_rows()],
+                         [["Company", "About", "Sector", "UEN"], ["Alpha", "=1+1", "Hardware", "U1"]])
+        self.assertEqual(out["B2"].data_type, "s")
+
+    def test_bad_exclude_is_refused_and_nothing_written(self):
+        cases = {
+            "every row": ([0, 1, 2], "Tick at least one company to start"),
+            "out of range": ([3], "Row 3 is not in companies.csv, which has 3 rows (0 to 2)."),
+            "negative": ([-1], "Row -1 is not in companies.csv, which has 3 rows (0 to 2)."),
+            "not a number": (["0"], "exclude must list row numbers, not '0'."),
+            "a bool": ([True], "exclude must list row numbers, not True."),
+            "not a list": (3, "exclude must be a list of row numbers."),
+        }
+        for label, (exclude, message) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValueError) as ctx:
+                    write_without_rows(self.source, self.dest, exclude)
+                self.assertEqual(str(ctx.exception), message)
+                self.assertFalse(self.dest.exists())
+
+    def test_xls_with_exclusions_is_refused(self):
+        source = self.tmp / "companies.xls"
+        source.write_bytes(b"not read")
+        with self.assertRaises(ValueError) as ctx:
+            write_without_rows(source, self.tmp / "out" / "companies.xls", [0])
+        self.assertEqual(str(ctx.exception), "Rows cannot be left out of an .xls file. Save companies.xls as .xlsx "
+                                             "and upload it again, or tick every row.")
 
 
 if __name__ == "__main__":

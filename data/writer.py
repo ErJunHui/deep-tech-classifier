@@ -88,6 +88,15 @@ MANAGEMENT_COLUMNS = [
     "Patents Found",
 ]
 
+# Added only when the caller passes reviewer decisions (the web app's export)
+_REVIEW_COLUMNS = ["Final Verdict", "Reviewer Decision", "Reviewer Note", "Reviewed At"]
+REVIEW_MANAGEMENT_COLUMNS = (
+    MANAGEMENT_COLUMNS[:MANAGEMENT_COLUMNS.index("Action Required") + 1]
+    + _REVIEW_COLUMNS
+    + MANAGEMENT_COLUMNS[MANAGEMENT_COLUMNS.index("Action Required") + 1:]
+)
+REVIEW_DETAIL_COLUMNS = ["reviewer_decision", "reviewer_verdict", "reviewer_note", "reviewed_at"]
+
 # Fill colours
 FILL_GREEN = PatternFill("solid", fgColor="A7FC92")
 FILL_RED = PatternFill("solid", fgColor="FF9999")
@@ -114,16 +123,23 @@ def write_results(
     companies: List[Dict[str, Any]],
     results: List[Dict[str, Any]],
     run_stats: Dict[str, Any],
+    decisions: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> None:
     """
     Write results to an Excel file with three sheets:
       Sheet 1: Overview — vertical metrics dashboard.
       Sheet 2: Management View — 10-col decision sheet with colour coding.
       Sheet 3: Full Detail — every result column.
+
+    `decisions` maps a position in `companies` to a reviewer decision
+    {"verdict", "note", "at", "reclassified"}. When it is given (even empty)
+    the sheets gain reviewer columns; when None the workbook is as before.
+    Raises ValueError for malformed decisions, before anything is written.
     """
+    _check_decisions(decisions, len(companies))
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    rows = _build_flat_rows(companies, results)
+    rows = _build_flat_rows(companies, results, decisions)
     results_df = pd.DataFrame(rows)
 
     # Write all sheets via pandas first (gives us a workbook to open with openpyxl)
@@ -136,10 +152,12 @@ def write_results(
 
     # Now re-open with openpyxl and apply all styling/content
     wb = load_workbook(output_path)
-    _write_overview_sheet(wb, results, run_stats)
-    _write_management_sheet(wb, results, companies)
+    review = None if decisions is None else _review_metrics(companies, results, decisions)
+    _write_overview_sheet(wb, results, run_stats, review)
+    _write_management_sheet(wb, results, companies, decisions)
     _write_detail_sheet(wb, results_df)
-    _write_legend_sheet(wb, run_stats.get("model"))
+    _write_legend_sheet(wb, run_stats.get("model"), reviewed=decisions is not None)
+    _store_formulas_as_text(wb)
     wb.save(output_path)
 
     logger.info(f"Results written to {output_path}")
@@ -149,14 +167,17 @@ def write_incremental(
     output_path: str,
     all_companies: List[Dict[str, Any]],
     all_results: List[Dict[str, Any]],
+    decisions: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> None:
     """
     Overwrite output file with current completed results (called after each checkpoint).
     Writes Management View and Full Detail sheets (no Overview — run not yet complete).
+    `decisions` is as for write_results.
     """
+    _check_decisions(decisions, len(all_companies))
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
-    rows = _build_flat_rows(all_companies, all_results)
+    rows = _build_flat_rows(all_companies, all_results, decisions)
     df = pd.DataFrame(rows)
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
@@ -165,9 +186,10 @@ def write_incremental(
         pd.DataFrame().to_excel(writer, sheet_name="Legend", index=False)
 
     wb = load_workbook(output_path)
-    _write_management_sheet(wb, all_results, all_companies)
+    _write_management_sheet(wb, all_results, all_companies, decisions)
     _write_detail_sheet(wb, df)
-    _write_legend_sheet(wb)
+    _write_legend_sheet(wb, reviewed=decisions is not None)
+    _store_formulas_as_text(wb)
     wb.save(output_path)
 
     logger.debug(f"Incremental write: {len(rows)} rows to {output_path}")
@@ -176,6 +198,27 @@ def write_incremental(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _check_decisions(decisions: Optional[Dict[int, Dict[str, Any]]], count: int) -> None:
+    """Raise ValueError unless every key is a row position (an int, not a bool) and every decision has a verdict."""
+    if decisions is None:
+        return
+    for key, decision in decisions.items():
+        if not isinstance(key, int) or isinstance(key, bool):
+            raise ValueError(f"Decision key {key!r} is not a row position (an int)")
+        if not 0 <= key < count:
+            raise ValueError(f"Decision key {key} is outside the {count} companies (0 to {count - 1})")
+        if not isinstance(decision, dict) or "verdict" not in decision:
+            raise ValueError(f"Decision for row {key} has no verdict")
+
+
+def _store_formulas_as_text(wb) -> None:
+    """The writer never writes formulas: store any string openpyxl took for one (e.g. '=1+1') as text."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f" and isinstance(cell.value, str):
+                    cell.data_type = "s"
 
 # Columns that contain dict values and should use human-readable formatting
 _DICT_COLUMNS = {"key_signals", "criteria", "cpc_analysis", "self_audit", "checks"}
@@ -199,10 +242,11 @@ def _dict_to_readable(d: dict) -> str:
 def _build_flat_rows(
     companies: List[Dict[str, Any]],
     results: List[Dict[str, Any]],
+    decisions: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
-    """Merge original company rows with result columns."""
+    """Merge original company rows with result columns (and reviewer columns when decisions are given)."""
     rows = []
-    for company, result in zip(companies, results):
+    for idx, (company, result) in enumerate(zip(companies, results)):
         row = dict(company.get("_original_row", {}))
         for col in RESULT_COLUMNS:
             val = result.get(col, "")
@@ -211,13 +255,25 @@ def _build_flat_rows(
             elif isinstance(val, dict):
                 val = _dict_to_readable(val) if col in _DICT_COLUMNS else json.dumps(val)
             row[col] = val
+        if decisions is not None:
+            row.update(zip(REVIEW_DETAIL_COLUMNS, _decision_values(decisions.get(idx))))
         rows.append(row)
     return rows
+
+
+def _decision_values(decision: Optional[Dict[str, Any]]) -> tuple:
+    """(kind, verdict, note, at) for a reviewer decision; all blank for an undecided row.
+    kind is 'Reclassified' or 'Confirmed'."""
+    if not decision:
+        return ("", "", "", "")
+    kind = "Reclassified" if decision.get("reclassified") else "Confirmed"
+    return (kind, decision["verdict"], decision.get("note") or "", decision.get("at") or "")
 
 
 def _build_management_row(
     company: Dict[str, Any],
     result: Dict[str, Any],
+    decision: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Synthesize a single Management View row from a company + result pair."""
     original = company.get("_original_row", {})
@@ -238,6 +294,11 @@ def _build_management_row(
     tier = _review.confidence_tier(confidence)
     risk_flag = _review.risk_flag(result)
     action = _review.action_required(verdict, risk_flag)
+    kind, reviewer_verdict, note, reviewed_at = _decision_values(decision)
+    final_verdict = reviewer_verdict or verdict
+    if kind:
+        # A reviewer has settled the row: act on their verdict, nothing left to review
+        action = _review.action_for_verdict(final_verdict)
 
     # Key Reason — first ~200 chars
     key_reason = reasoning[:200] + "…" if len(reasoning) > 200 else reasoning
@@ -260,6 +321,10 @@ def _build_management_row(
         "Confidence Tier": tier,
         "Risk Flag": risk_flag,
         "Action Required": action,
+        "Final Verdict": final_verdict,
+        "Reviewer Decision": kind,
+        "Reviewer Note": note,
+        "Reviewed At": reviewed_at,
         "Key Reason": key_reason,
         "Full Reasoning": reasoning,
         "Patents Found": patent_count,
@@ -273,8 +338,9 @@ def _write_overview_sheet(
     wb,
     results: List[Dict[str, Any]],
     run_stats: Dict[str, Any],
+    review: Optional[List[tuple]] = None,
 ) -> None:
-    """Populate the Overview sheet with a vertical metrics dashboard."""
+    """Populate the Overview sheet with a vertical metrics dashboard (plus a Review group when given)."""
     ws = wb["Overview"]
 
     # Clear placeholder content
@@ -314,6 +380,7 @@ def _write_overview_sheet(
             ("Escalations Pending", escalations),
             ("Contested Classifications", disputed),
         ]),
+        *([("Review", review)] if review is not None else []),
         ("Run Info", [
             ("Run ID", run_stats.get("run_id", "N/A")),
             ("Start Time", run_stats.get("start_time", "N/A")),
@@ -355,6 +422,24 @@ def _write_overview_sheet(
     # Column widths
     ws.column_dimensions["A"].width = 36
     ws.column_dimensions["B"].width = 28
+
+
+def _review_metrics(
+    companies: List[Dict[str, Any]],
+    results: List[Dict[str, Any]],
+    decisions: Dict[int, Dict[str, Any]],
+) -> List[tuple]:
+    """Overview rows counting reviewer decisions and rows still marked Needs Review."""
+    rows = [
+        _build_management_row(company, result, decisions.get(i))
+        for i, (company, result) in enumerate(zip(companies, results))
+    ]
+    kinds = [r["Reviewer Decision"] for r in rows]
+    return [
+        ("Verdicts Confirmed", kinds.count("Confirmed")),
+        ("Reclassified", kinds.count("Reclassified")),
+        ("Still Need Review", sum(1 for r in rows if r["Action Required"] == "Needs Review")),
+    ]
 
 
 def _model_metrics(model: Dict[str, Any]) -> List[tuple]:
@@ -435,19 +520,21 @@ def _write_management_sheet(
     wb,
     results: List[Dict[str, Any]],
     companies: List[Dict[str, Any]],
+    decisions: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> None:
-    """Populate the Management View sheet with styled 10-column layout."""
+    """Populate the Management View sheet with styled 10-column layout (plus reviewer columns when decisions are given)."""
     ws = wb["Management View"]
+    columns = MANAGEMENT_COLUMNS if decisions is None else REVIEW_MANAGEMENT_COLUMNS
 
     # Clear placeholder content
     for row in ws.iter_rows():
         for cell in row:
             cell.value = None
 
-    # Build management rows
+    # Build management rows; each decision is attached by position before the sort
     mgmt_rows = [
-        _build_management_row(company, result)
-        for company, result in zip(companies, results)
+        _build_management_row(company, result, (decisions or {}).get(i))
+        for i, (company, result) in enumerate(zip(companies, results))
     ]
 
     # Sort: Escalations first, then by confidence descending
@@ -455,7 +542,7 @@ def _write_management_sheet(
 
     # Write header
     header_font = Font(bold=True)
-    for col_idx, col_name in enumerate(MANAGEMENT_COLUMNS, start=1):
+    for col_idx, col_name in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col_idx, value=col_name)
         cell.font = header_font
         cell.fill = FILL_HEADER
@@ -466,20 +553,19 @@ def _write_management_sheet(
 
     # Write data rows
     for row_idx, mgmt_row in enumerate(mgmt_rows, start=2):
-        verdict = mgmt_row["Verdict"]
         risk_flag = mgmt_row["Risk Flag"]
         tier = mgmt_row["Confidence Tier"]
 
-        for col_idx, col_name in enumerate(MANAGEMENT_COLUMNS, start=1):
+        for col_idx, col_name in enumerate(columns, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=mgmt_row[col_name])
 
-            # Verdict colour (column 3)
-            if col_name == "Verdict":
-                if verdict == "deep tech":
+            # Verdict colour (column 3); Final Verdict uses the same colours
+            if col_name in ("Verdict", "Final Verdict"):
+                if mgmt_row[col_name] == "deep tech":
                     cell.fill = FILL_GREEN
-                elif verdict == "general tech":
+                elif mgmt_row[col_name] == "general tech":
                     cell.fill = FILL_RED
-                elif verdict == "error":
+                elif mgmt_row[col_name] == "error":
                     cell.fill = FILL_GREY
 
             # Risk Flag colour (column 6)
@@ -503,7 +589,7 @@ def _write_management_sheet(
                 cell.alignment = Alignment(wrap_text=True)
 
     # Auto-filter
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(MANAGEMENT_COLUMNS))}1"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}1"
 
     # Column widths
     col_widths = {
@@ -517,11 +603,15 @@ def _write_management_sheet(
         "Confidence Tier": 16,
         "Risk Flag": 12,
         "Action Required": 16,
+        "Final Verdict": 14,
+        "Reviewer Decision": 18,
+        "Reviewer Note": 50,
+        "Reviewed At": 22,
         "Key Reason": 50,
         "Full Reasoning": 60,
         "Patents Found": 14,
     }
-    for col_idx, col_name in enumerate(MANAGEMENT_COLUMNS, start=1):
+    for col_idx, col_name in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(col_idx)].width = col_widths.get(col_name, 15)
 
 
@@ -555,8 +645,8 @@ def _write_detail_sheet(wb, results_df: pd.DataFrame) -> None:
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
 
 
-def _write_legend_sheet(wb, model: Optional[Dict[str, Any]] = None) -> None:
-    """Add a Legend sheet explaining column values."""
+def _write_legend_sheet(wb, model: Optional[Dict[str, Any]] = None, reviewed: bool = False) -> None:
+    """Add a Legend sheet explaining column values (and the reviewer columns when `reviewed`)."""
     if "Legend" not in wb.sheetnames:
         wb.create_sheet("Legend")
     ws = wb["Legend"]
@@ -601,6 +691,17 @@ def _write_legend_sheet(wb, model: Optional[Dict[str, Any]] = None) -> None:
          "Whether the company has meaningful intellectual-property barriers "
          "(granted patents, trade secrets, or defensible proprietary know-how); "
          "N/A when the criteria was not assessed"),
+        *([
+            ("Final Verdict", "Management View",
+             "deep tech / general tech / error",
+             "The reviewer's verdict where a reviewer decided the row, otherwise the pipeline Verdict; "
+             "for decided rows Action Required is Approve / Reject from this verdict"),
+            ("Reviewer Decision", "Management View",
+             "Confirmed / Reclassified / (empty)",
+             "Confirmed = reviewer kept the pipeline verdict; "
+             "Reclassified = reviewer changed it; "
+             "empty = not yet reviewed"),
+        ] if reviewed else []),
         # --- Full Detail — booleans / enums ---
         ("validator_triggered", "Full Detail",
          "True / False",
