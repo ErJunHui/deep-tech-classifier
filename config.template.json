@@ -38,5 +38,8 @@
   "batch": {
     "enabled": true,
     "batch_poll_interval_s": 30
+  },
+  "concurrency": {
+    "workers": 8
   }
 }
