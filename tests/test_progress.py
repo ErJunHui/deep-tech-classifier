@@ -98,7 +98,7 @@ class SequentialEmitTests(ProgressTestCase):
         super().setUp()
         for target, repl in (
             ("agent0_enrich", mock.Mock(return_value=dict(ENRICH_OK))),
-            ("lookup_in_lane", mock.Mock(return_value=EPOResult(raw_status="ok"))),
+            ("run_epo_lookup", mock.Mock(return_value=EPOResult(raw_status="ok"))),
             ("agent1_classify", mock.Mock(side_effect=lambda **kw: _agent1())),
             ("agent2_validate", mock.Mock(side_effect=lambda **kw: _agent2())),
         ):

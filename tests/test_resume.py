@@ -16,7 +16,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pipeline import orchestrator as orch  # noqa: E402
+from pipeline import epo_bridge, orchestrator as orch  # noqa: E402
+from pipeline.epo_bridge import EPOResult  # noqa: E402
 from pipeline.model_resolver import ModelSetupError  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
     ModelChangedError, ResumeError, load_partial_results, run_pipeline,
@@ -306,6 +307,40 @@ class ParallelBatchTests(ResumeTestCase):
         self.run_pipeline(_companies(list("ABCDE")))
         self.assertIn("Phase 1: 2 companies have no web description because enrichment failed.",
                       self.logged_messages())
+
+
+class EPOLaneTests(ResumeTestCase):
+    """EPO lookups run on the shared "epo" thread only when gathering in parallel."""
+
+    def gather_threads(self, workers):
+        threads = []
+
+        def lookup(*args, **kwargs):
+            threads.append(threading.current_thread().name)
+            return EPOResult(raw_status="ok")
+
+        # The orchestrator's direct call and the lane's call both land here.
+        for module in (orch, epo_bridge):
+            p = mock.patch.object(module, "run_epo_lookup", side_effect=lookup)
+            p.start()
+            self.addCleanup(p.stop)
+        orch._phase1_gather(
+            companies=_companies(list("ABC")), gathered={}, gathered_path="gathered.jsonl",
+            workers=workers, config=CONFIG, epo_enabled=True, epo_package_dir="",
+            epo_key="k", epo_secret="s", enrichment_enabled=True, provider=self.provider,
+        )
+        return threads
+
+    def test_one_worker_looks_up_patents_on_the_calling_thread(self):
+        with mock.patch.object(orch, "lookup_in_lane") as lane:
+            threads = self.gather_threads(workers=1)
+        lane.assert_not_called()
+        self.assertEqual(threads, [threading.current_thread().name] * 3)
+
+    def test_several_workers_look_up_patents_on_the_epo_thread(self):
+        threads = self.gather_threads(workers=4)
+        self.assertEqual(len(threads), 3)
+        self.assertTrue(all(name.startswith("epo") for name in threads), threads)
 
 
 class LegacyGatheredFileTests(ResumeTestCase):

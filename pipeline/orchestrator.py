@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from pipeline.epo_bridge import lookup_in_lane, EPOResult
+from pipeline.epo_bridge import lookup_in_lane, run_epo_lookup, EPOResult
 from pipeline.parallel import run_indexed, workers_from
 from pipeline.confidence import compute_final_confidence, apply_validator
 from pipeline.json_utils import parse_json
@@ -417,8 +417,14 @@ def _gather_one(
     enrichment_enabled: bool,
     provider,
     index: Optional[int] = None,
+    epo_in_lane: bool = False,
 ) -> Dict[str, Any]:
-    """Run Agent 0 (web enrichment) + EPO lookup for one company → company_data dict."""
+    """
+    Run Agent 0 (web enrichment) + EPO lookup for one company → company_data dict.
+
+    epo_in_lane: run the EPO lookup on the shared EPO thread. Set it when several
+    companies are gathered at once; otherwise the lookup runs on this thread.
+    """
     name = company["company_name"]
     uen = company.get("uen", "")
     domain = company.get("domain", "")
@@ -439,7 +445,8 @@ def _gather_one(
 
     if epo_enabled and epo_key and epo_secret:
         progress.emit("step", index=index, step="Patent lookup")
-        epo_result = lookup_in_lane(
+        lookup = lookup_in_lane if epo_in_lane else run_epo_lookup
+        epo_result = lookup(
             name, epo_key, epo_secret, epo_package_dir,
             description=resolved_description, domain=domain,
         )
@@ -505,7 +512,7 @@ def _phase1_gather(
 
     def work(i: int) -> Dict[str, Any]:
         logger.info(f"[{i+1}/{total}] Phase 1: {companies[i]['company_name']}")
-        return _gather_one(companies[i], index=i, **gather_kwargs)
+        return _gather_one(companies[i], index=i, epo_in_lane=workers > 1, **gather_kwargs)
 
     def record(i: int, company_data: Dict[str, Any]) -> None:
         _check_model_drift(provider)
