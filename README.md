@@ -189,6 +189,7 @@ All settings live in `config.json`. Defaults below are those in `config.template
 | `domain_column` | `"domain"` | Header of the domain/industry column |
 | `uen_column` | `"uen"` | Header of the UEN column |
 | `checkpoint_interval` | `10` | Refresh the output Excel file every N companies |
+| `excel_checkpoint_min_interval_s` | `60` | Refresh the output Excel file at most once every this many seconds. The last write always happens. Resume progress in `checkpoints/` is saved after every company regardless |
 
 ### `llm`
 
@@ -239,6 +240,17 @@ All settings live in `config.json`. Defaults below are those in `config.template
 |---|---|---|
 | `enabled` | `true` | Classify all companies in one Anthropic batch job (about half the classifier cost, but results can take up to an hour or more) |
 | `batch_poll_interval_s` | `30` | Seconds between checks on the batch job |
+| `min_companies` | `100` | Use a batch job only for runs of at least this many companies. Smaller runs are classified with direct calls, which is faster for them |
+
+### `concurrency`
+
+| Field | Default | Description |
+|---|---|---|
+| `workers` | `8` | Companies processed at the same time (1 to 32). `1` processes them strictly one at a time, with no extra threads. Lower it if the log shows `Rate limit` warnings |
+
+### Run time
+
+EPO allows about 5 patent searches per minute, so each company needs about 17 seconds of EPO time. Patent lookups do not speed up with more workers. For large runs with `epo.enabled`, this sets the minimum run time, whatever `workers` is: about 5 hours for 1,000 companies. Turn off `epo.enabled` for a faster run without patent data.
 
 ## LLM providers
 
@@ -250,7 +262,7 @@ Choose a provider and a tier. You do not need to know any model names.
 | `"gemini"` | Flash-Lite | Flash | Pro | No | Google Search grounding |
 | `"openai"` | GPT-4o mini | GPT-4o | GPT-4o | No | Dedicated search model |
 
-With Gemini or OpenAI, `batch.enabled` is ignored and companies are processed one at a time.
+With Gemini or OpenAI, `batch.enabled` is ignored and companies are classified with direct calls, `concurrency.workers` at a time.
 
 ### How the model is chosen
 

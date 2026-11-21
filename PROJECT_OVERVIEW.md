@@ -140,7 +140,7 @@ deep_tech_classifier/
 |---------|-------------|
 | **Batch processing** | Uses Anthropic Message Batches API for cost-efficient parallel classification of large lists |
 | **Resume support** | Interrupted runs can be resumed with `--resume`; no work is lost |
-| **Checkpointing** | Progress saved every 10 companies; incremental Excel output written at each checkpoint |
+| **Checkpointing** | Progress saved after every company; the Excel output is refreshed every 10 companies, at most once a minute |
 | **Confidence scoring** | Confidence in the chosen verdict: LLM confidence adjusted by patent evidence, revised by web validation |
 | **Web enrichment** | Automatically fills missing company descriptions via live web search before classification |
 | **Adversarial validation** | Low-confidence results are challenged by a second AI agent using live web searches |
@@ -279,10 +279,15 @@ EPO_SECRET=...                   # EPO OPS API consumer secret
 | `confidence.epo_adjust_max` | `15` | Max points patents add to (or take from) confidence |
 | `confidence.low_evidence_cap` | `60` | Confidence ceiling when there is no description and no patents |
 | `enrichment.max_searches` | `2` | Max web searches per Agent 0 call |
-| `pipeline.checkpoint_interval` | `10` | Save progress every N companies |
+| `pipeline.checkpoint_interval` | `10` | Refresh the Excel output every N companies |
+| `pipeline.excel_checkpoint_min_interval_s` | `60` | Refresh the Excel output at most once per this many seconds (the last write always happens) |
 | `batch.enabled` | `true` | Use Anthropic Batch API (50% cost saving) |
+| `batch.min_companies` | `100` | Smaller runs skip the batch job and use direct calls |
+| `concurrency.workers` | `8` | Companies processed at the same time; `1` is fully sequential |
 | `epo.epo_package_dir` | `./lib/epo_patent` | Path to embedded EPO package |
 | `epo.enabled` | `true` | Enable/disable EPO patent lookup |
+
+**Run time.** EPO allows about 5 patent searches per minute, so roughly 17 seconds per company. More workers do not speed this up. With EPO lookups on, it sets the minimum run time for large runs, whatever the worker count.
 
 ---
 
