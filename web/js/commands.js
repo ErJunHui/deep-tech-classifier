@@ -10,7 +10,8 @@
    registers the row actions it owns (registerActions). */
 import * as api from './api.js';
 import { clamp, counts, dateLabel, paletteItems, downloadToast, panelWidth, parseUi, uiToStore } from './model.js';
-import { S, refreshView, stopActive, resumeActive, resumable, openSetup, showRun } from './state.js';
+import { S, refreshView, stopActive, resumeActive, resumable } from './state.js';
+import { openSetup, showRun } from './setup.js';
 import { setupShown } from './store.js';
 import { undo } from './decisions.js';
 import { R, kbd, MOD } from './render/util.js';

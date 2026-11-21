@@ -6,10 +6,8 @@
    a new run's setup (file, column menus, row ticks, settings popover,
    analyst sheet, Start). The command menu, shortcuts sheet, reading view,
    divider, filter shortcuts and download are in commands.js. */
-import {
-  S, renderDetail, stopActive, resumeActive,
-  openSetup, cancelSetup, showRun, setupChanged, loadFile, clearFile, startRun,
-} from './state.js';
+import { S, renderDetail, stopActive, resumeActive } from './state.js';
+import { openSetup, cancelSetup, showRun, setupChanged, loadFile, clearFile, startRun } from './setup.js';
 import { setupShown } from './store.js';
 import { record, restore, undo } from './decisions.js';
 import {

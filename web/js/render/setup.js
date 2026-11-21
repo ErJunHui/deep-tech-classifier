@@ -4,7 +4,7 @@
    setupHeadHtml, setupThHtml, renderSetupTable, setupEmptyHtml,
    renderSetupBar, openMap, settingsPopHtml and closePop. Reads S.draft (the
    draft run, model.newDraft) and S.setup (GET /api/setup); the actions that
-   call the API (upload, estimate, start) are in state.js. Only a window of
+   call the API (upload, estimate, start) are in ../setup.js. Only a window of
    the file's rows is rendered, with the results table's footer. Every
    render does nothing while the draft is parked (store.setupShown false),
    so an answer for it never paints over the run on screen. */
