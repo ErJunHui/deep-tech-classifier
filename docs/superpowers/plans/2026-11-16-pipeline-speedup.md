@@ -174,6 +174,8 @@ Expected: OK
 
 The three minor points from the Task 1 review. The tests Task 1 copied from this plan are too weak to protect the stop and drift behaviour that Tasks 2–4 rely on.
 
+**Status:** Done in `833db0b`. Review approved. Two minor points remain: a bypassed executor patch would pass, only 5s slower, and the mid-batch test cannot force several jobs to finish at once.
+
 **Files:**
 - Modify: `tests/test_parallel.py`, `pipeline/parallel.py` (docstring and, only if a new test demands it, `run_indexed`)
 
@@ -192,11 +194,11 @@ Decisions:
   - On Windows, the wait may not see the Ctrl-C until the next company finishes.
   - A second Ctrl-C during the cleanup wait leaves the running workers to finish in the background. Their results are discarded.
 
-- [ ] **Step 1: Write the new tests** in `tests/test_parallel.py` (cancellation count, started == finished, no record after error, work off the calling thread, no index recorded twice). Keep the six existing tests unchanged.
-- [ ] **Step 2: Run them.** Run: `python -m unittest tests.test_parallel -v`. They are expected to pass against the Task 1 code. If any fails, fix `run_indexed` to the existing contract.
-- [ ] **Step 3: Update the `run_indexed` docstring** with the ordering and Ctrl-C notes above.
-- [ ] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
-- [ ] **Step 5: Commit** — `Pin the worker-pool cancellation behaviour in tests`
+- [x] **Step 1: Write the new tests** in `tests/test_parallel.py` (cancellation count, started == finished, no record after error, work off the calling thread, no index recorded twice). Keep the six existing tests unchanged.
+- [x] **Step 2: Run them.** Run: `python -m unittest tests.test_parallel -v`. They are expected to pass against the Task 1 code. If any fails, fix `run_indexed` to the existing contract.
+- [x] **Step 3: Update the `run_indexed` docstring** with the ordering and Ctrl-C notes above.
+- [x] **Step 4: Run all tests.** Run: `python -m unittest discover tests` — Expected: OK
+- [x] **Step 5: Commit** — `Pin the worker-pool cancellation behaviour in tests`
 
 ---
 
