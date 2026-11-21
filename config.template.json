@@ -5,7 +5,8 @@
     "description_column": "description",
     "domain_column": "domain",
     "uen_column": "uen",
-    "checkpoint_interval": 10
+    "checkpoint_interval": 10,
+    "excel_checkpoint_min_interval_s": 60
   },
   "llm": {
     "provider": "anthropic",

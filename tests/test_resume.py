@@ -776,6 +776,42 @@ class BatchModelLockTests(ResumeTestCase):
         self.assertEqual(orch.load_run_state()["model"]["requested"], "fake")
 
 
+class DirectExcelCheckpointTests(ResumeTestCase):
+    """Six companies with checkpoint_interval 2: three checkpoints fall due."""
+
+    def count_excel_writes(self, min_interval_s):
+        pipeline_cfg = {"checkpoint_interval": 2, "excel_checkpoint_min_interval_s": min_interval_s}
+        with mock.patch.dict(CONFIG, {"pipeline": pipeline_cfg}), \
+                mock.patch.object(orch, "write_incremental") as write:
+            results = self.run_pipeline(_companies(list("ABCDEF")))
+        self.assertEqual([r["company_name"] for r in results], list("ABCDEF"))
+        return write.call_count
+
+    def test_excel_checkpoints_are_rate_limited_but_the_last_one_is_always_written(self):
+        self.assertEqual(self.count_excel_writes(3600), 1)
+
+    def test_zero_interval_writes_at_every_checkpoint(self):
+        self.assertEqual(self.count_excel_writes(0), 3)
+
+
+class ValidationExcelCheckpointTests(DirectExcelCheckpointTests):
+    batching = True
+
+    def setUp(self):
+        super().setUp()
+        validate = mock.Mock(return_value={"validator_verdict": "confirm",
+                                           "final_classification": "deep tech",
+                                           "updated_confidence": 80})
+        p = mock.patch.object(orch, "agent2_validate", validate)
+        p.start()
+        self.addCleanup(p.stop)
+        # Threshold 101 sends every company to the validator.
+        p = mock.patch.dict(CONFIG, {"validation": {
+            "validator_enabled": True, "validator_threshold": 101}})
+        p.start()
+        self.addCleanup(p.stop)
+
+
 del ResumeTestCase  # base class only; keep unittest discovery from running it
 
 if __name__ == "__main__":

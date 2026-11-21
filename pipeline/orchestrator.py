@@ -236,6 +236,7 @@ def _run_pipeline_batch(
     batch_cfg = config.get("batch", {})
 
     checkpoint_interval = pipeline_cfg.get("checkpoint_interval", 10)
+    excel_min_interval_s = pipeline_cfg.get("excel_checkpoint_min_interval_s", 60)
     validator_threshold = val_cfg.get("validator_threshold", 70)
     validator_enabled = val_cfg.get("validator_enabled", True)
     epo_enabled = epo_cfg.get("enabled", True)
@@ -409,13 +410,18 @@ def _run_pipeline_batch(
         result["company_name"] = name
         return result
 
+    last_excel_write = time.monotonic()
+
     def record(i: int, result: Dict[str, Any]) -> None:
+        nonlocal last_excel_write
         _check_model_drift(provider)
         done[i] = result
         _append_llm_checkpoint(run_id, i, result)
         logger.info(f"[{len(done)}/{total}] Phase 4 done: {result['company_name']}")
-        if len(done) % checkpoint_interval == 0 or len(done) == total:
+        if _excel_checkpoint_due(len(done), total, checkpoint_interval,
+                                 last_excel_write, excel_min_interval_s):
             _write_excel_checkpoint(output_path, companies, done)
+            last_excel_write = time.monotonic()
             logger.info(f"Excel checkpoint written at {len(done)}/{total}")
 
     run_indexed([i for i in range(total) if i not in done], work, record, workers)
@@ -845,6 +851,7 @@ def _run_pipeline_sequential(
     epo_cfg = config.get("epo", {})
 
     checkpoint_interval = pipeline_cfg.get("checkpoint_interval", 10)
+    excel_min_interval_s = pipeline_cfg.get("excel_checkpoint_min_interval_s", 60)
     validator_threshold = val_cfg.get("validator_threshold", 70)
     validator_enabled = val_cfg.get("validator_enabled", True)
     epo_enabled = epo_cfg.get("enabled", True)
@@ -909,13 +916,18 @@ def _run_pipeline_sequential(
         result["company_name"] = name
         return result
 
+    last_excel_write = time.monotonic()
+
     def record(i: int, result: Dict[str, Any]) -> None:
+        nonlocal last_excel_write
         _check_model_drift(provider)
         done[i] = result
         _append_llm_checkpoint(run_id, i, result)
         logger.info(f"[{len(done)}/{total}] Done: {result['company_name']}")
-        if len(done) % checkpoint_interval == 0 or len(done) == total:
+        if _excel_checkpoint_due(len(done), total, checkpoint_interval,
+                                 last_excel_write, excel_min_interval_s):
             _write_excel_checkpoint(output_path, companies, done)
+            last_excel_write = time.monotonic()
             logger.info(f"Checkpoint written at company {len(done)}/{total}")
 
     run_indexed([i for i in range(total) if i not in done], work, record, workers)
@@ -1022,6 +1034,17 @@ def _check_alignment(
                 f"but the checkpoint has {name!r}. Resume with the original input file, "
                 "or start a fresh run without --resume."
             )
+
+
+def _excel_checkpoint_due(
+    count: int, total: int, interval: int, last_write: float, min_interval_s: float,
+) -> bool:
+    """The write after the last company always happens; a due checkpoint is
+    skipped when the previous write (or the start of the phase) was less than
+    min_interval_s ago, since each rewrite of the whole workbook gets slower."""
+    if count == total:
+        return True
+    return count % interval == 0 and time.monotonic() - last_write >= min_interval_s
 
 
 def _write_excel_checkpoint(
