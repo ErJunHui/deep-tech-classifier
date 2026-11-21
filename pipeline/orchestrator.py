@@ -357,19 +357,12 @@ def _run_pipeline_batch(
         logger.info(f"Phase 4 resume: {len(done)} companies already checkpointed.")
     total = len(company_data_list)
 
-    for i, cd in enumerate(company_data_list):
-        name = cd["company_name"]
-
-        if i in done:
-            logger.info(f"[{i+1}/{total}] Skipping (done): {name}")
-            continue
-
-        logger.info(f"[{i+1}/{total}] Phase 4: {name}")
+    def work(i: int) -> Dict[str, Any]:
+        name = company_data_list[i]["company_name"]
         t_start = time.time()
-
         try:
             result = _finalize_one(
-                cd=cd,
+                cd=company_data_list[i],
                 agent1=agent1_outputs.get(str(i)),
                 config=config,
                 validator_enabled=validator_enabled,
@@ -381,18 +374,20 @@ def _run_pipeline_batch(
         except Exception as exc:
             logger.error(f"Unhandled error in Phase 4 for '{name}': {exc}", exc_info=True)
             result = _error_result(name)
-        _check_model_drift(provider)
-
-        t_end = time.time()
-        result["processing_time_s"] = round(t_end - t_start, 2)
+        result["processing_time_s"] = round(time.time() - t_start, 2)
         result["company_name"] = name
+        return result
 
+    def record(i: int, result: Dict[str, Any]) -> None:
+        _check_model_drift(provider)
         done[i] = result
         _append_llm_checkpoint(run_id, i, result)
-
-        if (i + 1) % checkpoint_interval == 0 or (i + 1) == total:
+        logger.info(f"[{len(done)}/{total}] Phase 4 done: {result['company_name']}")
+        if len(done) % checkpoint_interval == 0 or len(done) == total:
             _write_excel_checkpoint(output_path, companies, done)
-            logger.info(f"Excel checkpoint written at {i+1}/{total}")
+            logger.info(f"Excel checkpoint written at {len(done)}/{total}")
+
+    run_indexed([i for i in range(total) if i not in done], work, record, workers)
 
     run_state["batch_phase"] = "complete"
     _save_run_state(run_state)

@@ -319,6 +319,96 @@ class ParallelBatchTests(ResumeTestCase):
                       self.logged_messages())
 
 
+class ParallelValidationTests(ResumeTestCase):
+    batching = True
+    workers = 4
+    names = list("ABCDEF")
+
+    def setUp(self):
+        super().setUp()
+        self.validate = mock.Mock(side_effect=self.confirm)
+        p = mock.patch.object(orch, "agent2_validate", self.validate)
+        p.start()
+        self.addCleanup(p.stop)
+        # Threshold 101 sends every company to the validator.
+        p = mock.patch.dict(CONFIG, {"validation": {
+            "validator_enabled": True, "validator_threshold": 101}})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def confirm(self, **kw):
+        return {"validator_verdict": "confirm", "final_classification": "deep tech",
+                "updated_confidence": 50 + self.names.index(kw["company_name"])}
+
+    def test_out_of_order_validation_keeps_rows_aligned(self):
+        lock, running, most_running = threading.Lock(), [0], [0]
+
+        def validate(**kw):
+            with lock:
+                running[0] += 1
+                most_running[0] = max(most_running[0], running[0])
+            time.sleep(0.06 - 0.01 * self.names.index(kw["company_name"]))  # later rows finish first
+            with lock:
+                running[0] -= 1
+            return self.confirm(**kw)
+
+        self.validate.side_effect = validate
+        results = self.run_pipeline(_companies(self.names))
+        self.assertGreater(most_running[0], 1)  # companies were validated side by side
+        self.assertEqual([r["company_name"] for r in results], self.names)
+        self.assertEqual([r["confidence"] for r in results], [50, 51, 52, 53, 54, 55])
+
+    def test_model_drift_during_validation_stops_the_run_and_resume_finishes_it(self):
+        companies = _companies(self.names)
+        lock, calls = threading.Lock(), [0]
+
+        def validate(**kw):
+            with lock:
+                calls[0] += 1
+                if calls[0] == 3:
+                    self.provider.model_drift = ("fake-v1", "fake-v2")
+            return self.confirm(**kw)
+
+        self.validate.side_effect = validate
+        with self.assertRaises(ModelChangedError):
+            self.run_pipeline(companies)
+        _, partial = load_partial_results(companies)
+        self.assertLess(len(partial), 6)
+
+        self.provider.model_drift = None
+        self.validate.reset_mock(side_effect=True)
+        self.validate.side_effect = self.confirm
+        results = self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.validate.call_count, 6 - len(partial))
+        self.assertEqual([r["confidence"] for r in results], [50, 51, 52, 53, 54, 55])
+
+    def test_interrupt_during_validation_then_resume_validates_only_the_rest(self):
+        companies = _companies(self.names)
+
+        def validate(**kw):
+            if kw["company_name"] == "D":
+                time.sleep(0.05)  # other rows keep finishing meanwhile
+                raise KeyboardInterrupt()
+            return self.confirm(**kw)
+
+        self.validate.side_effect = validate
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_pipeline(companies)
+        done_companies, partial = load_partial_results(companies)
+        self.assertNotIn("D", [c["company_name"] for c in done_companies])  # D never finished
+        done_before = len(partial)
+
+        self.enrich.reset_mock()
+        self.validate.reset_mock(side_effect=True)
+        self.validate.side_effect = self.confirm
+        results = self.run_pipeline(companies, resume=True)
+        self.assertEqual(self.validate.call_count, 6 - done_before)
+        self.assertEqual(self.enrich.call_count, 0)        # Phase 1 not redone
+        self.assertEqual(len(self.batches.created), 1)     # batch not resubmitted
+        self.assertEqual([r["company_name"] for r in results], self.names)
+        self.assertEqual([r["confidence"] for r in results], [50, 51, 52, 53, 54, 55])
+
+
 class PatentLookupWarningTests(ResumeTestCase):
     batching = True
     workers = 4
