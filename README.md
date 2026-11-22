@@ -252,7 +252,7 @@ All settings live in `config.json`. Defaults below are those in `config.template
 
 When EPO is busy, it allows 5 patent searches per minute. The client waits 12 seconds before each search, and the search itself takes a few seconds, so each company needs about 17 seconds of EPO time. Patent lookups do not speed up with more workers. For large runs with `epo.enabled`, this sets the minimum run time, whatever `workers` is: about 5 hours for 1,000 companies. When EPO is less busy, the limit is higher and runs are faster. Turn off `epo.enabled` for a faster run without patent data.
 
-The run estimate in the web app assumes the default of 8 workers. If you set `workers` lower, runs take longer than the estimate shows.
+The run estimate in the web app uses the `workers` value from `config.json`. Restart the app after changing it.
 
 ## LLM providers
 

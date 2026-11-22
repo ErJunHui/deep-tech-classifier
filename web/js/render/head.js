@@ -3,7 +3,7 @@
    the Failed and Interrupted pills and their notices. */
 import { esc, counts, dateLabel, countOf } from '../model.js';
 import { S, resumable, setupShown } from '../store.js';
-import { R, kbd } from './util.js';
+import { R, put, kbd, railBtn } from './util.js';
 import { counterHtml, putWithCounters } from './counter.js';
 
 const PILL = {
@@ -29,8 +29,11 @@ function cfgTags(cfg, batch) {
 export function renderHead(opts) {
   if (setupShown()) return; // the setup head (render/setup.js)
   const el = R('head');
-  el.hidden = !S.active;
-  if (!S.active) { el.innerHTML = ''; return; }
+  // With no run open a narrow window still needs the Runs button (the rail
+  // holds + New run); styles.css hides this bare head when the rail is a column.
+  el.hidden = false;
+  el.classList.toggle('is-bare', !S.active);
+  if (!S.active) { put(el, '<div class="wb-head-row">' + railBtn(S.drawer) + '<div class="wb-head-t"><h1>Deep Tech Classifier</h1></div></div>'); return; }
   const run = S.active.run;
   const pill = PILL[run.status] || PILL.stopped;
   const date = dateLabel(run.createdAt, new Date());
@@ -54,5 +57,5 @@ export function renderHead(opts) {
     extra += '<div class="wb-notice">' + esc(run.error || 'The pipeline stopped with an error.') + '</div>';
   }
   const tip = [run.id, date, run.model, countOf(k.total, 'company', 'companies')].filter(Boolean).join(' · ');
-  putWithCounters(el, '<div class="wb-head-row"><div class="wb-head-t"><h1 title="' + esc(tip) + '"><span class="wb-h1-f">' + esc(run.file) + '</span> <span class="wb-status ' + pill[0] + '">' + pill[1] + '</span></h1><div class="wb-head-meta">' + meta + '</div></div><div class="wb-head-acts">' + acts + '</div></div>' + extra, opts);
+  putWithCounters(el, '<div class="wb-head-row">' + railBtn(S.drawer) + '<div class="wb-head-t"><h1 title="' + esc(tip) + '"><span class="wb-h1-f">' + esc(run.file) + '</span> <span class="wb-status ' + pill[0] + '">' + pill[1] + '</span></h1><div class="wb-head-meta">' + meta + '</div></div><div class="wb-head-acts">' + acts + '</div></div>' + extra, opts);
 }

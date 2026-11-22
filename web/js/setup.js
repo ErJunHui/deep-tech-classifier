@@ -7,7 +7,7 @@
    rendering in render/setup.js. */
 import * as api from './api.js';
 import {
-  ROW_WINDOW, newDraft, mappingForFile, startProblem, startRequest, estimateRows, countOf,
+  ROW_WINDOW, newDraft, reuseOffer, mappingForFile, startProblem, startRequest, estimateRows, countOf,
 } from './model.js';
 import { S, setupShown } from './store.js';
 import { openRun, renderAll, noteSummary } from './state.js';
@@ -92,6 +92,19 @@ export function cancelSetup(restoreFocus) {
   if (b) b.focus();
 }
 
+/* Esc with a file loaded: leaves setup but keeps the draft parked in the
+   rail ("+ New run", O or its rail item returns to it), so a stray key
+   never throws away an upload and its mapping. Focus as in cancelSetup. */
+export function parkSetup() {
+  if (!S.draft || S.draft.starting) return;
+  hideSetup();
+  renderAll();
+  toast('New run kept', 'Press O or pick it in the sidebar to return.');
+  const ret = setupRet && document.querySelector('[data-fk="' + setupRet + '"]');
+  const b = ret || (S.active && document.querySelector('[data-fk="rail-' + S.active.run.id + '"]'));
+  if (b) b.focus();
+}
+
 /* After the draft changed: re-renders what shows it and asks for a new
    estimate. opts.table: the table too (mapping, ticks). opts.fields false:
    only the numbers, while a field of the sheet is being typed in. */
@@ -128,22 +141,35 @@ function estimateSoon() {
   }, ESTIMATE_DEBOUNCE_MS);
 }
 
-/* Uploads file (a File from the picker or a drop) and shows its rows. The
-   server's rejection is shown with the file area. When the draft was parked
-   meanwhile, the answer is kept in it and only the rail changes. */
-export async function loadFile(file) {
+/* Uploads file (a File from the picker or a drop) and shows its rows. */
+export function loadFile(file) {
+  if (file) loadUpload(file.name, () => api.uploadFile(file));
+}
+
+/* "Use <file> again" on a "Same settings…" draft: the run's own file
+   (model.reuseOffer) becomes a new upload, then it is as if it was dropped. */
+export function reuseFile() {
+  const offer = reuseOffer(S.draft);
+  if (offer) loadUpload(offer.name, () => api.reuseRunFile(offer.runId));
+}
+
+/* Reads the file called name with request (resolving to the upload's
+   inspect dict) and shows its rows. The server's rejection is shown with
+   the file area. When the draft was parked meanwhile, the answer is kept in
+   it and only the rail changes. */
+async function loadUpload(name, request) {
   const dr = S.draft;
   // While Start's request is in flight the file it uses stays.
-  if (!file || !setupShown() || dr.starting) return;
+  if (!setupShown() || dr.starting) return;
   const token = ++uploadToken;
-  dr.reading = file.name; dr.error = '';
+  dr.reading = name; dr.error = '';
   renderSetupHead();
   if (!dr.file) renderSetupTable();
   renderSetupBar(); // Start waits for the file (model.startProblem)
-  announce('Reading ' + file.name + '…');
+  announce('Reading ' + name + '…');
   let info;
   try {
-    info = await api.uploadFile(file);
+    info = await request();
   } catch (e) {
     if (token !== uploadToken || S.draft !== dr) return;
     dr.reading = ''; dr.error = e.message;
@@ -186,7 +212,7 @@ function fixProblem(prob) {
   else if (prob.fix === 'map') openMap('company_name');
   else if (prob.fix === 'sheet') openAnalyst('start');
   else {
-    const b = document.querySelector(prob.fix === 'rows' ? '[data-fk="inc-all"]' : '[data-fk="pick-file"]');
+    const b = document.querySelector(prob.fix === 'rows' ? '[data-fk="inc-all"]' : '[data-fk="reuse-file"], [data-fk="pick-file"]');
     if (b) b.focus();
   }
 }

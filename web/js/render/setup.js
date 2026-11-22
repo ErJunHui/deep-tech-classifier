@@ -10,11 +10,11 @@
    so an answer for it never paints over the run on screen. */
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
-  classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText,
+  classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, extraColumnsShort, noDescriptionNote, cellExample,
+  modelFor, isCustom, reuseOffer, visibleRows, fileLine, noBatchText, tierPriceText, directRunText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
-import { R, put, kbd } from './util.js';
+import { R, put, kbd, railBtn } from './util.js';
 import { moreHtml } from './table.js';
 
 /* The three quality levels, by tier. */
@@ -43,6 +43,14 @@ const root = () => document.querySelector('.v-workbench');
 export const draftProvider = () => S.setup.providers.find((p) => p.id === S.draft.cfg.provider) || null;
 /* Why batch mode is off for prov (model.noBatchText). */
 export const batchOffText = (prov) => noBatchText(S.setup.providers, prov);
+/* Why batch mode changes nothing for the draft (model.batchSmallRunText), or
+   null. The estimate's batchMin wins over setup's: both come from the server. */
+export function batchSmallText() {
+  const dr = S.draft;
+  if (!dr || !dr.file) return null;
+  const min = (dr.est && dr.est.batchMin) || S.setup.batchMinCompanies || 100;
+  return batchSmallRunText(tickedCount(dr), min);
+}
 
 /* Reads msg out through the live region. */
 export function announce(msg) {
@@ -65,10 +73,11 @@ export function setSetupChrome(on) {
   R('setbar').innerHTML = '';
 }
 
-/* Focus where setup starts: Start when a file is loaded, else Choose file. */
+/* Focus where setup starts: Start when a file is loaded, else "Use <file>
+   again" when it is offered, else Choose file. */
 export function focusSetupStart() {
   if (!setupShown()) return;
-  const b = root().querySelector(S.draft.file ? '[data-fk="start"]' : '[data-fk="pick-file"]');
+  const b = root().querySelector(S.draft.file ? '[data-fk="start"]' : '[data-fk="reuse-file"], [data-fk="pick-file"]');
   if (b) b.focus();
 }
 
@@ -80,7 +89,7 @@ function headHtml() {
     ? '<span class="wb-file-n">' + esc(f.name) + '</span><span class="wb-num">' + esc(fileLine(f, d.mapping)) + '</span>'
     : '<span>' + (dr.fromId ? 'Settings and column mapping from <span class="wb-mono">' + esc(dr.fromId) + '</span>. ' : '') + 'Drop a spreadsheet anywhere in this column.</span>';
   if (f && dr.reading) meta += '<span>Reading ' + esc(dr.reading) + '…</span>';
-  const h = '<div class="wb-head-row"><div class="wb-head-t"><h1><span class="wb-h1-f">' + title + '</span> <span class="wb-status">Not started</span></h1><div class="wb-head-meta">' + meta + '</div></div>' +
+  const h = '<div class="wb-head-row">' + railBtn(S.drawer) + '<div class="wb-head-t"><h1><span class="wb-h1-f">' + title + '</span> <span class="wb-status">Not started</span></h1><div class="wb-head-meta">' + meta + '</div></div>' +
     (f ? '<div class="wb-head-acts"><button class="wb-btn wb-btn-sm" data-act="clear-file" data-fk="clear-file">Change file</button></div>' : '') + '</div>';
   const notes = [];
   if (f) {
@@ -89,7 +98,12 @@ function headHtml() {
     const desc = noDescriptionNote(d);
     if (desc) notes.push('<p class="wb-snote is-warn">' + esc(desc) + '</p>');
     const extra = extraColumns(f.headers, d.mapping);
-    if (extra.length) notes.push('<p class="wb-snote">Also in your file and kept unchanged in your output: <b>' + esc(extra.join(', ')) + '</b>.</p>');
+    if (extra.length) {
+      // A long list is cut to a few names and a count; the full list is in the tooltip.
+      const x = extraColumnsShort(extra, 3);
+      const names = '<b>' + esc(x.shown.join(', ')) + '</b>' + (x.more ? ' and ' + x.more + ' more' : '');
+      notes.push('<p class="wb-snote"' + (x.more ? ' title="' + esc(extra.join(', ')) + '"' : '') + '>' + (extra.length === 1 ? 'One more column' : extra.length + ' more columns') + ' in your file, kept unchanged in your output: ' + names + '.</p>');
+    }
   }
   return h + (notes.length ? '<div class="wb-snotes">' + notes.join('') + '</div>' : '');
 }
@@ -97,6 +111,7 @@ export function renderSetupHead() {
   if (!setupShown()) return;
   const el = R('head');
   el.hidden = false;
+  el.classList.remove('is-bare');
   put(el, headHtml());
 }
 
@@ -116,11 +131,17 @@ function thHtml(fl) {
 
 function emptyHtml() {
   const dr = S.draft;
+  const offer = reuseOffer(dr);
+  // A "Same settings…" draft offers its run's file first; Choose file steps back.
+  const acts = offer
+    ? '<button class="wb-btn wb-btn-primary" data-act="reuse-file" data-fk="reuse-file" title="' + esc(offer.name) + ' from ' + esc(offer.runId) + '"><span>Use <span class="wb-reuse-n">' + esc(offer.name) + '</span> again</span></button>' +
+      '<button class="wb-btn" data-act="pick-file" data-fk="pick-file">Choose another file…</button>'
+    : '<button class="wb-btn wb-btn-primary" data-act="pick-file" data-fk="pick-file">Choose file…</button>';
   return '<div class="wb-sempty"><div class="wb-sempty-in">' +
     '<div class="wb-sempty-ic" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></div>' +
-    '<h2>' + (dr.reading ? 'Reading ' + esc(dr.reading) + '…' : 'Drop a spreadsheet here to start') + '</h2>' +
+    '<h2>' + (dr.reading ? 'Reading ' + esc(dr.reading) + '…' : offer ? 'Use the same file, or drop a new one' : 'Drop a spreadsheet here to start') + '</h2>' +
     '<p>One row per company. Column headers are matched case-insensitively, and your companies appear in this table before anything runs.</p>' +
-    '<div class="wb-sempty-acts"><button class="wb-btn wb-btn-primary" data-act="pick-file" data-fk="pick-file">Choose file…</button></div>' +
+    '<div class="wb-sempty-acts">' + acts + '</div>' +
     (dr.error ? '<p class="wb-snote is-err" role="alert">' + esc(dr.error) + '</p>' : '') +
     '<small>Excel (.xlsx, .xls) or CSV. Nothing is sent to an AI provider until you start the run.</small></div></div>';
 }
@@ -143,7 +164,7 @@ function rowHtml(i, cells, cols, enter) {
       else inner = '<span class="' + (fl.key === 'company_name' ? 'wb-sname' : fl.key === 'uen' ? 'wb-mono' : fl.key === 'description' ? 'wb-dim' : '') + '">' + esc(v) + '</span>';
       return '<td class="wb-s-' + fl.key + '"' + (v.trim() ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>';
     }).join('') +
-    '<td class="wb-s-status"><span class="wb-queued">' + (out ? 'Left out' : 'Queued') + '</span></td></tr>';
+    '<td class="wb-s-status"><span class="wb-queued">' + setupRowStatus(out) + '</span></td></tr>';
 }
 
 /* opts.enter: the rows fade in, and the table starts at the top. */
@@ -157,7 +178,7 @@ export function renderSetupTable(opts) {
     '<th scope="col" class="wb-s-chk wb-chk">' + chk + '</th><th scope="col" class="wb-s-idx is-r"><div class="wb-sth is-r">#</div></th>' +
     SETUP_FIELDS.map(thHtml).join('') + '<th scope="col" class="wb-s-status is-out-col"><div class="wb-sth">Status</div></th></tr></thead><tbody>';
   if (!f) {
-    for (let i = 0; i < 7; i++) h += '<tr class="wb-ghost" aria-hidden="true"><td></td><td></td>' + [62, 48, 40, 78, 34].map((w) => '<td><span class="wb-ghost-bar" style="width:' + (w - i * 4) + '%"></span></td>').join('') + '</tr>';
+    // Only the headers: placeholder rows read as loading.
     put(wrap, h + '</tbody></table>' + emptyHtml());
     return;
   }
@@ -192,12 +213,12 @@ export function renderSetupBar() {
   else if (dr.startError) note = '<p class="wb-setbar-note is-why" id="wb-setbar-why" role="alert">' + esc(dr.startError) + '</p>';
   else {
     const est = dr.estFailed ? ' ' + ESTIMATE_FAILED : e ? (e.known ? '' : ' ' + esc(unknownCostLine(e))) + ' ' + esc(estimateNote(e)) : '';
-    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'One company at a time; results appear as each one finishes.') + est + '</p>';
+    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'Classified directly, ' + directRunText(S.setup.workers) + '; results appear as each one finishes.') + est + '</p>';
   }
   const why = prob || dr.startError;
   put(R('setbar'), '<div class="wb-setbar-top"><button class="wb-btn wb-btn-sm wb-set" data-act="settings-pop" data-fk="settings" aria-haspopup="dialog" aria-expanded="' + open + '">Settings: <b>' + esc(qualityName(d.tier)) + (isCustom(d, S.setup.defaults) ? ', customised' : '') + '</b> <span aria-hidden="true">▾</span></button>' +
     '<span class="wb-setbar-meta">' + (prov ? esc(prov.label) + ' · ' : '') + '<span class="wb-mono">' + esc(modelFor(d, S.setup)) + '</span></span></div>' +
-    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup"' + (dr.starting ? ' aria-disabled="true"' : '') + '>Cancel ' + kbd('Esc') + '</button>' +
+    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup"' + (dr.starting ? ' aria-disabled="true"' : '') + '>Cancel' + (cancelHintsEsc(dr) ? ' ' + kbd('Esc') : '') + '</button>' +
     '<button class="wb-btn wb-btn-primary wb-go" data-act="start" data-fk="start"' + (prob || dr.starting ? ' aria-disabled="true"' : '') + (dr.starting ? ' aria-busy="true"' : '') + (why ? ' aria-describedby="wb-setbar-why"' : '') + '>' + esc(label) + '</button></div>' + note);
 }
 
@@ -282,7 +303,9 @@ function settingsPopHtml() {
     '<label class="wb-opt"><input type="radio" name="wb-q" value="' + q.tier + '" data-fk="q-' + q.tier + '"' + (d.tier === q.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + (q.tier === S.setup.defaults.tier ? ' <span class="wb-tag is-auto">Recommended</span>' : '') + tierPriceHtml(prov, q.tier) + '</span><span class="wb-opt-s">' + q.sub + (prov ? ' Uses ' + esc(prov.tiers[q.tier]) + '.' : '') + '</span></label>').join('') + '</div></fieldset>' +
     '<fieldset class="wb-fs"><legend>What to check</legend>' + PLAIN_STEPS.map((s) => {
       const off = s.key === 'batch' && !!prov && !prov.batch;
-      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s">' + esc(off ? batchOffText(prov) : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
+      const small = !off && s.key === 'batch' ? batchSmallText() : null;
+      const note = off ? null : small ? { warn: false, text: small } : quickStepNote(s.key, S.setup);
+      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s' + (note && note.warn ? ' is-warn' : '') + '">' + esc(off ? batchOffText(prov) : note ? note.text : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
     }).join('') + '</fieldset>' +
     '<div class="wb-pop-foot"><button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="analyst-open" data-fk="analyst-open">Analyst settings…</button><button class="wb-btn wb-btn-sm" data-act="settings-done" data-fk="settings-done">Done</button></div>';
 }

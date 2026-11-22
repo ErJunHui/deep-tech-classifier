@@ -10,7 +10,7 @@ export function renderChips() {
   if (setupShown()) return; // hidden while a new run is set up
   const tools = R('tools');
   tools.hidden = !S.active;
-  if (!S.active) { R('chips').innerHTML = ''; return; }
+  if (!S.active) { R('chips').innerHTML = ''; R('tools-r').innerHTML = ''; return; }
   const run = S.active.run; const total = S.active.rows.length;
   const k = counts(S.active.rows);
   const f = S.f;
@@ -25,10 +25,12 @@ export function renderChips() {
   let html = '<span class="wb-chipgrp"><span class="wb-chipgrp-l">Review</span>' + chip('status', 'open', 'Needs review', k.open) + chip('status', 'reviewed', 'Reviewed', k.confirmed) + chip('status', 'reclassified', 'Reclassified', k.reclassified) + '</span>' +
     '<span class="wb-chipgrp"><span class="wb-chipgrp-l">Risk</span>' + RISKS.map((r) => chip('risk', r, r, k.risk[r])).join('') + '</span>' +
     '<span class="wb-chipgrp"><span class="wb-chipgrp-l">Verdict</span>' + chip('verdict', 'deep tech', 'Deep tech', k.deep) + chip('verdict', 'general tech', 'General tech', k.general) + '</span>';
-  if (f.bin != null) html += '<button class="wb-chip" data-act="clear-bin" data-fk="chip-bin" aria-pressed="true">Confidence ' + (f.bin * 10) + '–' + (f.bin === 9 ? 100 : f.bin * 10 + 9) + ' ✕</button>';
   let right = '<span class="wb-num">' + (anyFilter(f) ? 'Showing ' + S.viewIds.length + ' of ' + total : total + ' rows') + '</span>';
+  if (f.bin != null) right += '<button class="wb-chip" data-act="clear-bin" data-fk="chip-bin" aria-pressed="true">Confidence ' + (f.bin * 10) + '–' + (f.bin === 9 ? 100 : f.bin * 10 + 9) + ' ✕</button>';
   if (anyFilter(f)) right += '<button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="clear-filters" data-fk="clear-filters">Clear filters</button>';
   if (S.sortKey !== 'priority') right += '<button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="sort-priority" data-fk="sort-priority" title="Needs review first, then lowest confidence">Sort: review priority</button>';
   else right += '<span class="wb-muted">' + (run.status === 'running' ? 'Input order while running' : 'Review priority order') + '</span>';
-  put(R('chips'), html + '<span class="wb-tools-r">' + right + '</span>');
+  put(R('chips'), html);
+  // The count line is a row of its own, so turning a filter on never re-wraps the chips.
+  put(R('tools-r'), right);
 }

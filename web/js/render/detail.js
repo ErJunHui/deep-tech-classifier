@@ -3,16 +3,22 @@
    renderDetail through pendingDetail, with company fields read from the Row
    and result fields from row.result. A row whose classification ended in an
    error shows what went wrong and has no decision controls. main.js
-   registers renderDetail with state.js (setDetailRenderer). */
-import { esc, money, signed, flip, vLow, actionFor, confWord, hhmm, rowView, formProblem, needsNote, formKey } from '../model.js';
+   registers renderDetail with state.js (setDetailRenderer).
+
+   Reads top-down by importance: the decision, why the row was flagged (one
+   plain sentence, only when it was), the reasoning, then the evidence, then
+   the audit detail (confidence, validator, history) and a one-line footer of
+   run metadata. Colour marks only what still needs a decision. */
+import { esc, money, signed, flip, vLabel, vLow, actionFor, confWord, hhmm, rowView, formProblem, formHint, needsNote, formKey } from '../model.js';
 import { S, setupShown } from '../store.js';
-import { R, put, kbd, MOD, CRIT, verdictHtml, errorVerdictHtml, riskHtml } from './util.js';
+import { R, put, kbd, MOD, CRIT } from './util.js';
 
 const BASIS = { COMBINED: 'Input and web descriptions', WEB_DESCRIPTION: 'Web description', DESCRIPTION_ONLY: 'Input description only' };
 const VAL_FIND = { confirm: 'Confirmed the verdict', override: 'Argued for the other verdict', insufficient_evidence: 'Insufficient evidence' };
 const VAL_DEC = { AUTO_APPROVE: 'No escalation', ESCALATE_FOR_HUMAN_REVIEW: 'Escalated for human review' };
 /* Progress steps reported by the pipeline, mapped to the step list's keys. */
 const STEP_OF = { 'Waiting for batch': 'Classification', 'In batch job': 'Classification', 'Validation queued': 'Validation' };
+const CHEVRON = '<svg class="wb-chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.5 3.75 5 6.25l2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 const basisLabel = (b) => BASIS[b] || 'Basis not recorded';
 /* An ISO timestamp from the server (local time) as 14:40; '' when unreadable. */
@@ -22,6 +28,8 @@ function timeOf(iso) {
 }
 const settingsOf = (run) => run.settings || {};
 const pct = (n) => Math.max(0, Math.min(100, Number(n) || 0));
+/* A button label with its shortcut in the tooltip rather than on the button. */
+const keyTitle = (label, key) => ' title="' + label + ' (' + key + ')"';
 
 /* opts.reset: scroll the panel back to the top (a new selection). */
 export function renderDetail(opts) {
@@ -39,29 +47,30 @@ export function renderDetail(opts) {
 }
 
 function readToggle() {
-  return '<button class="wb-btn wb-btn-sm" data-act="reading" data-fk="reading" aria-pressed="' + S.reading + '" title="' + (S.reading ? 'Back to the table layout' : 'Give the evidence most of the screen') + '">' + (S.reading ? 'Exit reading view' : 'Reading view') + ' ' + kbd('E') + '</button>';
+  const label = S.reading ? 'Exit reading view' : 'Reading view';
+  return '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="reading" data-fk="reading" aria-pressed="' + S.reading + '"' + keyTitle(S.reading ? 'Back to the table layout' : 'Give the evidence most of the screen', 'E') + '>' + label + '</button>';
 }
 
 function detailTop(run, v) {
   const row = v.row;
   const mapping = settingsOf(run).mapping || {};
-  const sub = '<div class="wb-d-sub">' + (mapping.uen ? '<span class="wb-mono">UEN ' + esc(row.uen) + '</span>' : '') + '<span>' + esc(row.domain) + '</span><span class="wb-num">Row ' + v.idx + ' of ' + S.active.rows.length + '</span></div>';
-  let h = '<div class="wb-d-top"><div class="wb-d-row1"><div><h2>' + esc(row.name) + '</h2>' + sub + '</div>' + readToggle() + '</div>';
+  const sub = [mapping.uen && row.uen ? '<span class="wb-mono">' + esc(row.uen) + '</span>' : '', row.domain ? esc(row.domain) : '', '<span class="wb-num">Row ' + v.idx + ' of ' + S.active.rows.length + '</span>']
+    .filter(Boolean).join('<span class="wb-sep" aria-hidden="true">·</span>');
+  let h = '<div class="wb-d-top"><div class="wb-d-row1"><div><h2>' + esc(row.name) + '</h2><div class="wb-d-sub">' + sub + '</div></div>' + readToggle() + '</div>';
   if (v.error) {
-    h += '<div class="wb-d-row2">' + errorVerdictHtml() + '<span class="wb-dim">' + v.action + '</span></div>';
+    h += '<div class="wb-d-sum"><span class="wb-d-v is-error">Not classified</span></div>';
   } else if (v.r) {
     const r = v.r;
-    h += v.reclassified
-      ? '<div class="wb-d-row2">' + verdictHtml(v.verdict) + '<span class="wb-dim">· reviewer decision</span>' +
-        '<span class="wb-muted wb-num">Pipeline: ' + vLow(r.verdict) + ', ' + r.conf + ' · ' + esc(r.risk) + '</span>' +
-        '<span class="wb-dim">' + v.action + ' · reclassified</span></div>'
-      : '<div class="wb-d-row2">' + verdictHtml(v.verdict) +
-        '<span class="wb-d-conf"><b>' + r.conf + '</b> ' + confWord(r.conf).toLowerCase() + ' confidence</span>' + riskHtml(r.risk) +
-        '<span class="wb-dim">' + v.action + (v.confirmed ? ' · reviewed' : '') + '</span></div>';
+    const deep = v.verdict === 'deep tech';
+    h += '<div class="wb-d-sum"><span class="wb-d-v' + (deep ? ' is-deep' : '') + '">' + vLabel(v.verdict) + '</span>' +
+      (v.reclassified
+        ? '<span class="wb-d-c">Pipeline said ' + vLow(r.verdict) + ', <span class="wb-num">' + r.conf + '</span></span>'
+        : '<span class="wb-d-c"><b class="wb-num">' + r.conf + '</b> ' + confWord(r.conf).toLowerCase() + ' confidence</span>') +
+      (v.open ? '<span class="wb-st-flag">' + esc(r.risk) + '</span>' : '') + '</div>';
     h += decisionArea(run, v);
   } else {
     const p = run.status === 'running' ? row.step : null;
-    h += '<div class="wb-d-row2"><span class="wb-dim">' + (p ? 'In progress: ' + esc(p) : run.status === 'running' ? 'Queued' : 'Not started') + '. Decisions open when the result is in.</span></div>';
+    h += '<div class="wb-d-sum"><span class="wb-d-c">' + (p ? 'In progress: ' + esc(p) : run.status === 'running' ? 'Queued' : 'Not started') + '. Decisions open when the result is in.</span></div>';
   }
   return h + '</div>';
 }
@@ -72,33 +81,37 @@ function decisionArea(run, v) {
   const pv = v.r.verdict;
   if (v.dec) {
     const at = timeOf(v.dec.at);
-    return '<div class="wb-ds"><span class="wb-ds-t"><b>' + (v.reclassified ? '↺ Reclassified to ' + vLow(v.dec.verdict) : '✓ Confirmed ' + vLow(v.dec.verdict)) + '</b>' + (at ? ' · ' + at : '') + (v.dec.note ? ' · “' + esc(v.dec.note) + '”' : '') + '</span>' +
-      '<button class="wb-btn wb-btn-sm" data-act="change-dec" data-fk="change-dec">Change decision ' + kbd('X') + '</button>' +
-      '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="restore" data-fk="restore">Restore pipeline verdict</button></div>';
+    return '<div class="wb-ds"><span class="wb-ds-t">' + (v.reclassified ? 'Reclassified to ' + vLow(v.dec.verdict) : 'Confirmed ' + vLow(v.dec.verdict)) + (at ? ' at ' + at : '') + '</span>' +
+      '<button class="wb-btn wb-btn-sm" data-act="change-dec" data-fk="change-dec"' + keyTitle('Change decision', 'X') + '>Change</button>' +
+      '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="restore" data-fk="restore" title="Drop the reviewer decision and go back to the pipeline verdict">Restore pipeline verdict</button></div>';
   }
   if (v.flagged) {
-    return '<div class="wb-ds"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="quick-confirm" data-fk="quick-confirm">✓ Confirm ' + vLow(pv) + ' ' + kbd('C') + '</button>' +
-      '<button class="wb-btn wb-btn-sm" data-act="open-change" data-fk="open-change">Change to ' + vLow(flip(pv)) + ' ' + kbd('X') + '</button>' +
-      '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="open-note" data-fk="open-note">Note ' + kbd('M') + '</button></div>';
+    return '<div class="wb-ds"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="quick-confirm" data-fk="quick-confirm">Confirm ' + vLow(pv) + ' ' + kbd('C') + '</button>' +
+      '<button class="wb-btn wb-btn-sm" data-act="open-change" data-fk="open-change"' + keyTitle('Change to ' + vLow(flip(pv)), 'X') + '>Change to ' + vLow(flip(pv)) + '</button>' +
+      '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="open-note" data-fk="open-note"' + keyTitle('Add a note', 'M') + '>Add note</button></div>';
   }
-  return '<div class="wb-ds"><span class="wb-ds-t">' + v.action + ' · no review needed</span><button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="open-change" data-fk="open-change">Reclassify ' + kbd('X') + '</button></div>';
+  return '<div class="wb-ds"><span class="wb-ds-t">No review needed</span><button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="open-change" data-fk="open-change"' + keyTitle('Reclassify', 'X') + '>Reclassify</button></div>';
 }
 
 const NOTE_REQUIRED = 'Why the pipeline verdict is wrong (required, written to the workbook)';
 const NOTE_OPTIONAL = 'Note for the record (optional)';
 const whyOk = (req) => (req ? 'The note will be written to the workbook.' : kbd('Esc') + ' leaves the note, the draft is kept');
+/* The hint's class and HTML (model.formHint): grey until Record is tried. */
+const hintClass = (h) => 'wb-form-why' + (h.tone === 'error' ? '' : ' is-ok');
+const hintHtml = (h, req) => (h.tone === 'ok' ? whyOk(req) : esc(h.text));
 
 function formHtml(v, form) {
   const pv = v.r.verdict;
   const req = form.choice ? needsNote(v, form.choice) : false;
   const prob = formProblem(v, form);
+  const hint = formHint(v, form);
   return '<div class="wb-form"><div class="wb-seg" role="radiogroup" aria-label="Outcome">' +
-    '<label><input type="radio" name="wb-dec" value="confirm" data-fk="dec-confirm"' + (form.choice === 'confirm' ? ' checked' : '') + '>' + (v.flagged ? 'Confirm ' : 'Keep ') + vLow(pv) + ' ' + kbd('C') + '</label>' +
-    '<label><input type="radio" name="wb-dec" value="change" data-fk="dec-change"' + (form.choice === 'change' ? ' checked' : '') + '>Change to ' + vLow(flip(pv)) + ' ' + kbd('X') + '</label></div>' +
+    '<label title="Shortcut: C"><input type="radio" name="wb-dec" value="confirm" data-fk="dec-confirm"' + (form.choice === 'confirm' ? ' checked' : '') + '>' + (v.flagged ? 'Confirm ' : 'Keep ') + vLow(pv) + '</label>' +
+    '<label title="Shortcut: X"><input type="radio" name="wb-dec" value="change" data-fk="dec-change"' + (form.choice === 'change' ? ' checked' : '') + '>Change to ' + vLow(flip(pv)) + '</label></div>' +
     '<textarea data-fk="note" aria-label="Reviewer note" placeholder="' + (req ? NOTE_REQUIRED : NOTE_OPTIONAL) + '">' + esc(form.note) + '</textarea>' +
-    '<div class="wb-form-acts"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="record" data-fk="record"' + (prob ? ' disabled' : '') + '>Record ' + kbd(MOD, '↵') + '</button>' +
+    '<div class="wb-form-acts"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="record" data-fk="record"' + (prob ? ' aria-disabled="true"' : '') + '>Record ' + kbd(MOD, '↵') + '</button>' +
     '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="cancel-form" data-fk="cancel-form">Cancel</button>' +
-    '<span class="wb-form-why ' + (prob ? '' : 'is-ok') + '" data-r="form-why">' + (prob ? esc(prob) : whyOk(req)) + '</span></div></div>';
+    '<span class="' + hintClass(hint) + '" data-r="form-why" aria-live="polite">' + hintHtml(hint, req) + '</span></div></div>';
 }
 
 /* Brings the open form's Record button, hint and note placeholder up to date
@@ -113,9 +126,11 @@ export function syncForm() {
   const el = R('detail');
   const prob = formProblem(v, form);
   const req = form.choice ? needsNote(v, form.choice) : false;
-  const b = el.querySelector('[data-fk="record"]'); if (b) b.disabled = !!prob;
+  const hint = formHint(v, form);
+  const b = el.querySelector('[data-fk="record"]');
+  if (b) { if (prob) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
   const w = el.querySelector('[data-r="form-why"]');
-  if (w) { w.className = 'wb-form-why ' + (prob ? '' : 'is-ok'); w.innerHTML = prob ? esc(prob) : whyOk(req); }
+  if (w) { w.className = hintClass(hint); w.innerHTML = hintHtml(hint, req); }
   const ta = el.querySelector('[data-fk="note"]');
   if (ta) ta.placeholder = req ? NOTE_REQUIRED : NOTE_OPTIONAL;
 }
@@ -130,62 +145,55 @@ export function showFormError(message) {
   return true;
 }
 
+/* A collapsible section. The chevron shows when it is closed, or on hover. */
 function sec(key, title, aside, body) {
   const closed = !!S.collapsed[key];
-  return '<section class="wb-sec" data-sec="' + key + '"><h3 class="wb-sec-h"><button class="wb-sec-btn" data-act="toggle-sec" data-k="' + key + '" data-fk="sec-' + key + '" aria-expanded="' + !closed + '"><span class="wb-caret" aria-hidden="true">' + (closed ? '▸' : '▾') + '</span>' + title + '</button><span class="wb-sec-aside">' + (aside || '') + '</span></h3>' + (closed ? '' : '<div class="wb-sec-b">' + body + '</div>') + '</section>';
+  return '<section class="wb-sec' + (closed ? ' is-closed' : '') + '" data-sec="' + key + '"><h3 class="wb-sec-h"><button class="wb-sec-btn" data-act="toggle-sec" data-k="' + key + '" data-fk="sec-' + key + '" aria-expanded="' + !closed + '">' + title + CHEVRON + '</button><span class="wb-sec-aside">' + (aside || '') + '</span></h3>' + (closed ? '' : '<div class="wb-sec-b">' + body + '</div>') + '</section>';
 }
 
 function docHtml(run, v) {
   const r = v.r;
-  const main = (v.reclassified ? reclassHtml(v) : flagHtml(run, r)) +
-    sec('reasoning', 'Reasoning', v.reclassified ? 'Pipeline, supports ' + vLow(r.verdict) : 'Classifier, ' + basisLabel(r.basis).toLowerCase(), '<p class="wb-lead">' + esc(r.reasoning) + '</p>') +
-    criteriaHtml(r) + buildHtml(run, r, v) + evidenceHtml(v.row, r) + patentsHtml(r) + validatorHtml(run, r) + historyHtml(run, v) +
-    sec('facts', 'Run facts', '', factsHtml(run, v, false));
-  return '<div class="wb-doc"><div class="wb-doc-main">' + main + '</div><aside class="wb-doc-facts" aria-label="Facts">' + factsHtml(run, v, true) + '</aside></div>';
+  return '<div class="wb-doc">' + (v.reclassified ? reclassHtml(v) : flagHtml(run, v)) +
+    sec('reasoning', 'Reasoning', v.reclassified ? 'Pipeline’s, supports ' + vLow(r.verdict) : '', '<p class="wb-body">' + esc(r.reasoning) + '</p>') +
+    criteriaHtml(r) + evidenceHtml(v.row, r) + patentsHtml(r) + validatorHtml(run, r) + buildHtml(run, r, v) + historyHtml(run, v) +
+    metaHtml(run, r) + '</div>';
 }
 
-function factsHtml(run, v, stack) {
-  const row = v.row; const r = v.r; const cfg = settingsOf(run);
-  const web = r.hasWeb ? r.webSource : !cfg.enrichment ? 'Enrichment off' : r.webStatus === 'not_found' ? 'Nothing reliable found' : 'Not used';
-  const pat = r.patents.status === 'disabled' ? 'Lookup off' : r.patents.count + (r.patents.level ? ' · ' + r.patents.level : '');
-  const val = r.validated ? (VAL_FIND[r.val.verdict] || r.val.verdict) + ' · ' + r.val.confidence : cfg.validator ? 'Not needed' : 'Validation off';
-  const rows = [
-    ['UEN', (cfg.mapping || {}).uen ? '<span class="wb-mono">' + esc(row.uen) + '</span>' : 'Not mapped'],
-    ['Sector', esc(row.domain)], ['Basis', basisLabel(r.basis)], ['Web source', esc(web)], ['Patents', esc(pat)], ['Validator', esc(val)],
-    ['Cost', r.cost == null ? 'unknown (pinned model has no listed price)' : money(r.cost, 3)], ['Time', r.timeS == null ? '—' : r.timeS.toFixed(1) + ' s'],
-    ['Model', '<span class="wb-mono">' + esc(r.model || run.model) + '</span>'],
-  ];
-  return '<dl class="wb-kv wb-num' + (stack ? ' is-stack' : '') + '">' + rows.map((x) => '<dt>' + x[0] + '</dt><dd>' + x[1] + '</dd>').join('') + '</dl>';
+/* One line of run metadata. Values that only say something was off or not
+   used are left out. */
+function metaHtml(run, r) {
+  const items = [basisLabel(r.basis)];
+  if (r.hasWeb && r.webSource) items.push('Web: ' + esc(r.webSource));
+  items.push('<span class="wb-mono">' + esc(r.model || run.model) + '</span>');
+  if (r.timeS != null) items.push('<span class="wb-num">' + r.timeS.toFixed(1) + ' s</span>');
+  items.push(r.cost == null ? '<span title="Pinned model has no listed price">cost unknown</span>' : '<span class="wb-num">' + money(r.cost, 3) + '</span>');
+  return '<p class="wb-meta">' + items.join('<span class="wb-sep" aria-hidden="true">·</span>') + '</p>';
+}
+
+/* Why the reviewer is looking at this row: one sentence (and the validator's
+   reason, when it gave one), coloured only while the row is still open. A
+   clear row gets nothing, unless nothing could have challenged it. */
+function flagHtml(run, v) {
+  const r = v.r;
+  const cfg = settingsOf(run);
+  const th = Number(cfg.validatorThreshold);
+  let t = '';
+  if (r.risk === 'Clear') {
+    if (!(r.conf < th && !cfg.validator)) return '';
+    return '<div class="wb-note is-quiet"><p>Confidence is below ' + th + ' but validation was off for this run, so nothing challenged the verdict.</p></div>';
+  }
+  if (r.risk === 'Uncertain') t = 'Uncertain: the validator searched the web but confidence stayed below ' + th + '.';
+  else if (r.risk === 'Contested') t = 'Contested: the validator argued for ' + vLow(flip(r.verdict)) + ' at ' + esc(r.val ? r.val.confidence : '') + ', short of the ' + Number(cfg.overrideMinConfidence) + ' needed to override.';
+  else t = 'Escalated: the validator found the evidence contradictory or insufficient.';
+  const reason = r.val && r.val.escalationReason ? '<p>' + esc(r.val.escalationReason) + '</p>' : '';
+  return '<div class="wb-note' + (v.open ? ' is-open' : '') + '"><p class="wb-note-t">' + t + '</p>' + reason + '</div>';
 }
 
 function reclassHtml(v) {
   const r = v.r;
-  return '<div class="wb-flag r-Reclass"><div class="wb-flag-t">Reclassified by reviewer: ' + vLow(v.verdict) + '</div>' +
-    '<p>' + (v.dec.note ? '“' + esc(v.dec.note) + '”' : 'No note recorded.') + '</p>' +
-    '<p>The pipeline said ' + vLow(r.verdict) + ' with confidence ' + r.conf + ' (' + esc(r.risk) + '). The reasoning, criteria and confidence below are the pipeline’s and support its original verdict, not the reviewer’s.</p></div>';
-}
-
-function flagHtml(run, r) {
-  const cfg = settingsOf(run);
-  const th = Number(cfg.validatorThreshold);
-  let t = ''; let p = '';
-  if (r.risk === 'Clear') {
-    t = 'Clear: no open questions';
-    p = r.validated ? 'The validator checked the web and confirmed the verdict with enough confidence, so the action follows the verdict.'
-      : r.conf < th && !cfg.validator ? 'Confidence is below ' + th + ', but validation was off for this run, so nothing challenged the verdict. Treat it with care.'
-        : 'Confidence reached ' + th + ' or more without needing a second opinion. The action follows the verdict.';
-  } else if (r.risk === 'Uncertain') {
-    t = 'Uncertain: evidence is thin';
-    p = 'The validator searched the web, but confidence is still below ' + th + '. Nothing contradicts the verdict; there just is not enough to be sure.';
-  } else if (r.risk === 'Contested') {
-    t = 'Contested: the validator disagreed';
-    p = 'A second pass argued for ' + vLow(flip(r.verdict)) + ', with confidence ' + esc(r.val ? r.val.confidence : '') + '. That is below the ' + Number(cfg.overrideMinConfidence) + ' needed to change the verdict, so the original verdict stands with reduced confidence. Two readings are plausible.';
-  } else {
-    t = 'Escalate: needs a human decision';
-    p = 'The validator found the evidence contradictory or insufficient and handed the call to a reviewer.';
-  }
-  const reason = r.val && r.val.escalationReason ? '<p><b>Reason:</b> ' + esc(r.val.escalationReason) + '</p>' : '';
-  return '<div class="wb-flag r-' + esc(r.risk) + '"><div class="wb-flag-t">' + t + '</div><p>' + p + '</p>' + reason + '</div>';
+  return '<div class="wb-note"><p class="wb-note-t">Reclassified to ' + vLow(v.verdict) + ' by a reviewer.</p>' +
+    (v.dec.note ? '<p>“' + esc(v.dec.note) + '”</p>' : '') +
+    '<p class="wb-note-s">The pipeline said ' + vLow(r.verdict) + ' at ' + r.conf + '. The reasoning, criteria and confidence below are the pipeline’s.</p></div>';
 }
 
 function criteriaHtml(r) {
@@ -193,78 +201,102 @@ function criteriaHtml(r) {
   const met = CRIT.filter((x) => crit(x[0]).met).length;
   return sec('criteria', 'Criteria', '<span class="wb-num">' + met + ' of 3 met</span>', CRIT.map((x) => {
     const cr = crit(x[0]);
-    return '<div class="wb-crit"><span class="wb-mk ' + (cr.met ? 'is-y' : 'is-n') + '" aria-hidden="true">' + (cr.met ? '✓' : x[1]) + '</span><b>' + x[2] + ' · ' + (cr.met ? 'met' : 'not met') + '</b><p>' + esc(cr.reasoning) + '</p></div>';
+    return '<div class="wb-crit"><div class="wb-crit-h"><b>' + x[2] + '</b><span class="wb-crit-m' + (cr.met ? ' is-y' : '') + '">' + (cr.met ? 'Met' : 'Not met') + '</span></div><p>' + esc(cr.reasoning) + '</p></div>';
   }).join(''));
 }
 
+/* The confidence as a chain of steps, with what moved it underneath. */
 function buildHtml(run, r, v) {
   const cfg = settingsOf(run);
   const th = Number(cfg.validatorThreshold);
   const adjMax = Number(cfg.epoAdjustMax);
   const cap = Number(cfg.lowEvidenceCap);
-  let rows = '<tr><td>Classifier score<span class="wb-why">Agent 1 confidence in its verdict</span></td><td>' + r.llm + '</td></tr>';
-  const patWhy = !cfg.epo ? 'Patent lookup was off for this run' : r.adj === 0 ? (r.patents.count ? 'Patents are not deep tech; no adjustment' : 'No patents found; no adjustment') : r.patents.level + ' portfolio, ' + r.patents.count + ' patent' + (r.patents.count === 1 ? '' : 's') + ', max ±' + adjMax;
-  rows += '<tr><td>Patent adjustment<span class="wb-why">' + esc(patWhy) + '</span></td><td>' + signed(r.adj) + '</td></tr>';
-  if (r.capped && !r.validated) rows += '<tr><td>Low-evidence cap<span class="wb-why">No description and no patents</span></td><td>≤ ' + cap + '</td></tr>';
-  rows += '<tr><td>Before validation<span class="wb-why">' + (!cfg.validator ? 'Validation off for this run' : r.validated ? 'Below ' + th + ', so the validator ran' : r.pre < th ? 'Below ' + th + '; validator not triggered in this run' : th + ' or more, so no validation needed') + '</span></td><td>' + r.pre + '</td></tr>';
-  if (r.validated) {
-    const how = r.val.verdict === 'confirm' ? 'Confirmed: takes the validator’s confidence'
-      : r.override === 'applied' ? 'Override applied: verdict flipped, takes the validator’s confidence'
-        : r.override === 'blocked' ? 'Override blocked: at most 100 − ' + esc(r.val.confidence)
-          : 'Insufficient evidence: confidence can only go down';
-    rows += '<tr><td>Validator<span class="wb-why">' + how + (r.capped ? '; low-evidence cap ' + cap : '') + '</span></td><td>' + signed(r.conf - r.pre) + '</td></tr>';
+  const step = (l, val, cls) => '<li' + (cls ? ' class="' + cls + '"' : '') + '><span class="wb-flow-l">' + l + '</span><span class="wb-flow-v">' + val + '</span></li>';
+  const notes = [];
+  let steps = step('Classifier', r.llm);
+  if (cfg.epo) {
+    steps += step('Patents', signed(r.adj));
+    if (r.adj !== 0) notes.push('<b>Patents</b> ' + esc(r.patents.level) + ' portfolio, ' + r.patents.count + ' patent' + (r.patents.count === 1 ? '' : 's') + ', at most ±' + adjMax + '.');
   }
-  rows += '<tr class="is-total"><td>Final confidence</td><td>' + r.conf + '</td></tr>';
+  if (r.capped && !r.validated) { steps += step('Cap', '≤ ' + cap); notes.push('<b>Cap</b> No description and no patents, so confidence is capped at ' + cap + '.'); }
+  if (r.validated) {
+    steps += step('Validator', signed(r.conf - r.pre));
+    const how = r.val.verdict === 'confirm' ? 'Confirmed, so the validator’s confidence is used'
+      : r.override === 'applied' ? 'Override applied: the verdict flipped and takes the validator’s confidence'
+        : r.override === 'blocked' ? 'Override blocked, so confidence is at most 100 − ' + esc(r.val.confidence)
+          : 'Insufficient evidence, so confidence can only go down';
+    notes.push('<b>Validator</b> Ran because ' + r.pre + ' was below ' + th + '. ' + how + (r.capped ? '; low-evidence cap ' + cap : '') + '.');
+  } else if (cfg.validator && r.pre < th) {
+    notes.push('<b>Validator</b> Not triggered in this run, although ' + r.pre + ' is below ' + th + '.');
+  }
+  steps += step('Final', r.conf, 'is-total');
   const track = '<div class="wb-track" aria-hidden="true"><span class="wb-track-l"></span><span class="wb-track-th" style="left:' + pct(th) + '%"></span>' +
     (r.pre !== r.conf ? '<span class="wb-track-pre" style="left:' + pct(r.pre) + '%"></span>' : '') + '<span class="wb-track-fin" style="left:' + pct(r.conf) + '%"></span></div>' +
-    '<div class="wb-track-ax"><span>0</span><span>' + (r.pre !== r.conf ? '○ before validation · ● final · ' : '') + 'dashed: validation threshold ' + th + '</span><span>100</span></div>';
-  return sec('build', 'How the pipeline’s confidence was built', '<span class="wb-num">' + (v.reclassified ? 'in ' + vLow(r.verdict) + ': ' + r.conf : r.conf + ' · ' + confWord(r.conf).toLowerCase()) + '</span>', '<table class="wb-build"><tbody>' + rows + '</tbody></table>' + track);
+    '<div class="wb-track-ax"><span>0</span><span>' + (r.pre !== r.conf ? '○ before validation · ● final · ' : '') + 'dashed: threshold ' + th + '</span><span>100</span></div>';
+  return sec('build', 'How confidence was built', v.reclassified ? 'in ' + vLow(r.verdict) : '',
+    '<ol class="wb-flow">' + steps + '</ol>' + (notes.length ? '<div class="wb-flow-n">' + notes.map((n) => '<p>' + n + '</p>').join('') + '</div>' : '') + track);
 }
 
 function evidenceHtml(row, r) {
   let q = '';
-  if (r.hasWeb) q += '<div class="wb-quote">' + esc(r.webDescription) + '<span class="wb-quote-src">Web enrichment · ' + esc(r.webSource) + '</span></div>';
-  if (r.hasInputDesc) q += '<div class="wb-quote">' + esc(row.description) + '<span class="wb-quote-src">Input file</span></div>';
-  if (!q) q = '<div class="wb-quote">No description in the input file' + (r.webStatus === 'not_found' ? ' and nothing reliable found on the web' : '') + '. The verdict rests on the company name' + (r.patents.count ? ' and patents' : '') + '.</div>';
-  return sec('read', 'What the classifier read', basisLabel(r.basis), q);
+  if (r.hasWeb) q += '<blockquote class="wb-quote">' + esc(r.webDescription) + '<span class="wb-quote-src">Web · ' + esc(r.webSource) + '</span></blockquote>';
+  if (r.hasInputDesc) q += '<blockquote class="wb-quote">' + esc(row.description) + '<span class="wb-quote-src">Input file</span></blockquote>';
+  if (!q) q = '<p class="wb-body">No description in the input file' + (r.webStatus === 'not_found' ? ' and nothing reliable found on the web' : '') + '. The verdict rests on the company name' + (r.patents.count ? ' and patents' : '') + '.</p>';
+  return sec('read', 'What the classifier read', '', q);
 }
 
 function patentsHtml(r) {
   const p = r.patents;
-  if (p.status === 'disabled') return sec('patents', 'Patents (EPO)', 'off', '<p class="wb-muted">Patent lookup was off for this run.</p>');
-  const cpc = (p.cpc || []).map((x) => '<div class="wb-cpc"><code>' + esc(x.code) + '</code><span>' + esc(x.desc) + '</span></div>').join('');
-  return sec('patents', 'Patents (EPO)', '<span class="wb-num">' + p.count + ' found</span>', '<dl class="wb-kv"><dt>Deep tech level</dt><dd>' + esc(p.level) + '</dd>' + (p.domain ? '<dt>Domain</dt><dd>' + esc(p.domain) + '</dd>' : '') + '<dt>Lookup</dt><dd>' + (p.status === 'success' ? 'Matched in EPO' : 'No matching applicant') + '</dd></dl>' + (cpc ? '<div style="margin-top:6px">' + cpc + '</div>' : ''));
+  if (p.status === 'disabled') return sec('patents', 'Patents', 'lookup off', '<p class="wb-body wb-muted">Patent lookup was off for this run.</p>');
+  if (p.status !== 'success') return sec('patents', 'Patents', 'none found', '<p class="wb-body wb-muted">No matching applicant in the EPO register.</p>');
+  const cpc = (p.cpc || []).map((x) => '<li><code>' + esc(x.code) + '</code><span>' + esc(x.desc) + '</span></li>').join('');
+  return sec('patents', 'Patents', '<span class="wb-num">' + p.count + ' in EPO</span>',
+    '<dl class="wb-kv"><dt>Deep tech level</dt><dd>' + esc(p.level) + '</dd>' + (p.domain ? '<dt>Domain</dt><dd>' + esc(p.domain) + '</dd>' : '') + '</dl>' +
+    (cpc ? '<ul class="wb-cpc">' + cpc + '</ul>' : ''));
 }
 
 function validatorHtml(run, r) {
   const cfg = settingsOf(run);
   if (!r.validated) {
-    const why = !cfg.validator ? 'Validation was off for this run.' : 'Not run: confidence before validation was ' + r.pre + ', at or above the threshold of ' + Number(cfg.validatorThreshold) + ', or this company was not flagged for a second pass.';
-    return sec('validator', 'Validator (Agent 2)', 'not run', '<p class="wb-muted">' + why + '</p>');
+    const th = Number(cfg.validatorThreshold);
+    const why = !cfg.validator ? 'Validation was off for this run.'
+      : r.pre < th ? 'Not triggered for this company in this run, although confidence before validation (' + r.pre + ') was below ' + th + '.'
+        : 'Not needed: confidence before validation was ' + r.pre + ', at or above the threshold of ' + th + '.';
+    return sec('validator', 'Validator', 'not run', '<p class="wb-body wb-muted">' + why + '</p>');
   }
   const val = r.val;
   const sources = val.sources || [];
-  return sec('validator', 'Validator (Agent 2)', '<span class="wb-num">confidence ' + esc(val.confidence) + '</span>',
+  return sec('validator', 'Validator', '<span class="wb-num">confidence ' + esc(val.confidence) + '</span>',
     '<dl class="wb-kv"><dt>Finding</dt><dd>' + esc(VAL_FIND[val.verdict] || val.verdict) + (r.override ? ' (override ' + esc(r.override) + ')' : '') + '</dd><dt>Decision</dt><dd>' + esc(VAL_DEC[val.decision] || val.decision) + '</dd></dl>' +
-    '<div class="wb-quote" style="margin-top:8px">' + esc(val.summary) + '</div>' +
-    '<div class="wb-hint">Sources (' + sources.length + ')</div><ul class="wb-srcs">' + sources.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>');
+    (val.summary ? '<p class="wb-body">' + esc(val.summary) + '</p>' : '') +
+    (sources.length ? '<ul class="wb-srcs">' + sources.map(sourceHtml).join('') + '</ul>' : ''));
+}
+
+/* A validator source on one line: a web address as a link showing its site
+   and a faded path; anything else as plain text. */
+function sourceHtml(s) {
+  let u = null;
+  try { u = /^https?:\/\//i.test(s) ? new URL(s) : null; } catch (e) { u = null; }
+  if (!u) return '<li title="' + esc(s) + '">' + esc(s) + '</li>';
+  const path = (u.pathname + u.search).replace(/\/$/, '');
+  return '<li><a href="' + esc(u.href) + '" target="_blank" rel="noopener noreferrer" title="' + esc(s) + '">' + esc(u.hostname.replace(/^www\./, '')) + '<span>' + esc(path) + '</span></a></li>';
 }
 
 function historyHtml(run, v) {
   const h = v.row.history || [];
   const r = v.r;
-  const items = ['<li><span class="wb-h-time">' + esc(timeOf(run.createdAt)) + '</span><span><b>Pipeline:</b> ' + vLow(r.verdict) + ' · confidence ' + r.conf + ' · ' + esc(r.risk) + ' → ' + (r.risk !== 'Clear' ? 'Needs Review' : actionFor(r.verdict)) + '</span></li>'];
+  const items = ['<li><span class="wb-h-time">' + esc(timeOf(run.createdAt)) + '</span><span>Pipeline: ' + vLow(r.verdict) + ', confidence ' + r.conf + ', ' + esc(r.risk).toLowerCase() + ' → ' + (r.risk !== 'Clear' ? 'needs review' : actionFor(r.verdict).toLowerCase()) + '</span></li>'];
   let final = r.verdict;
   h.forEach((e) => {
     const what = e.type === 'restore' ? 'Restored pipeline verdict (' + vLow(e.verdict) + ')'
       : e.verdict !== final ? 'Changed to ' + vLow(e.verdict) : 'Confirmed ' + vLow(e.verdict);
     final = e.verdict;
-    items.push('<li><span class="wb-h-time">' + esc(timeOf(e.at)) + '</span><span><b>' + what + '</b>' + (e.note ? '<span class="wb-h-note">“' + esc(e.note) + '”</span>' : '') + '</span></li>');
+    items.push('<li><span class="wb-h-time">' + esc(timeOf(e.at)) + '</span><span>' + what + (e.note ? '<span class="wb-h-note">“' + esc(e.note) + '”</span>' : '') + '</span></li>');
   });
-  return sec('history', 'Decision history', h.length ? h.length + ' reviewer action' + (h.length === 1 ? '' : 's') : 'no reviewer actions yet', '<ol class="wb-hlist">' + items.join('') + '</ol>');
+  return sec('history', 'History', h.length ? h.length + ' reviewer action' + (h.length === 1 ? '' : 's') : '', '<ol class="wb-hlist">' + items.join('') + '</ol>');
 }
 
-const inputHtml = (row) => '<section class="wb-sec"><h3 class="wb-sec-h">From the input file</h3><div class="wb-quote">' + (row.description ? esc(row.description) : 'No description in the input file.') + '</div></section>';
+const inputHtml = (row) => '<section class="wb-sec"><h3 class="wb-sec-h">From the input file</h3>' + (row.description ? '<blockquote class="wb-quote">' + esc(row.description) + '</blockquote>' : '<p class="wb-body wb-muted">No description in the input file.</p>') + '</section>';
 
 /* A row without a result: the steps it goes through (the current one marked
    while the run is running) and its input description. Whether validation
@@ -285,16 +317,15 @@ function pendingDetail(run, v) {
     const txt = ci < 0 ? 'waiting' : i < ci ? 'done' : i === ci ? (p === s[0] ? 'in progress' : esc(p.toLowerCase())) : 'waiting';
     return '<li class="' + cls + '"><span>' + (i + 1) + '.</span><span>' + s[1] + '</span><span>' + txt + '</span></li>';
   }).join('');
-  return '<div class="wb-doc"><div class="wb-doc-main"><section class="wb-sec"><h3 class="wb-sec-h">' + (p ? 'In progress' : running ? 'Queued' : 'Not started') + '<span class="wb-sec-aside">' + (run.batch ? 'Batch mode' : 'One at a time') + '</span></h3><ul class="wb-steps">' + list + '</ul>' +
+  return '<div class="wb-doc"><section class="wb-sec"><h3 class="wb-sec-h">' + (p ? 'In progress' : running ? 'Queued' : 'Not started') + '<span class="wb-sec-aside">' + (run.batch ? 'Batch mode' : 'One at a time') + '</span></h3><ul class="wb-steps">' + list + '</ul>' +
     (running ? '' : '<p class="wb-hint">This company had not finished when the run stopped. Resume to classify it.</p>') + '</section>' +
-    inputHtml(v.row) + '</div></div>';
+    inputHtml(v.row) + '</div>';
 }
 
 /* A row whose classification ended in an error: what went wrong and its
    input description, no decision controls. */
 function errorHtml(v) {
-  return '<div class="wb-doc"><div class="wb-doc-main"><div class="wb-flag"><div class="wb-flag-t">Error: this company was not classified</div>' +
-    (v.r.errorMessage ? '<p>' + esc(v.r.errorMessage) + '</p>' : '') +
-    (v.row.description ? '<p><b>From the input file:</b> ' + esc(v.row.description) + '</p>' : '') +
-    '<p>Resume the run to retry it.</p></div></div></div>';
+  return '<div class="wb-doc"><div class="wb-note is-error"><p class="wb-note-t">This company was not classified. Resume the run to retry it.</p>' +
+    (v.r.errorMessage ? '<p class="wb-mono">' + esc(v.r.errorMessage) + '</p>' : '') + '</div>' +
+    inputHtml(v.row) + '</div>';
 }

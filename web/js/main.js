@@ -5,7 +5,7 @@
 import * as api from './api.js';
 import { S, openRun, renderAll, setDetailRenderer, startPolling } from './state.js';
 import { bindEvents } from './events.js';
-import { loadUi } from './commands.js';
+import { loadUi, watchLayout } from './commands.js';
 import { renderRailFoot } from './render/rail.js';
 import { renderDetail } from './render/detail.js';
 import { toast } from './render/toast.js';
@@ -21,6 +21,7 @@ async function loadNumberFlow() {
 async function boot() {
   setDetailRenderer(renderDetail);
   loadUi();
+  watchLayout(); // after loadUi: a narrow window drops the stored reading view's class
   bindEvents();
   await loadNumberFlow();
   // Each is retried by polling when it fails here (state.js tick).

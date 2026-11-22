@@ -1,7 +1,7 @@
 /* The modal layer: the keyboard shortcuts sheet and the command menu.
    Ported from the prototype's openHelp, openPalette and renderPalette (the
    HTML only); commands.js holds the state (S.modal) and the actions. */
-import { esc } from '../model.js';
+import { esc, paletteHeading } from '../model.js';
 import { R, kbd, MOD } from './util.js';
 
 const GROUPS = ['Navigate', 'Decide', 'View', 'Run'];
@@ -27,15 +27,19 @@ export function renderPaletteShell() {
   el.querySelector('[data-fk="pal-q"]').focus();
 }
 
-/* The command menu's list: m.items (model.paletteItems), m.active marked
-   and scrolled into view. */
+/* The command menu's list: m.items (model.paletteItems) under a heading per
+   group (model.paletteHeading), m.active marked and scrolled into view. */
 export function renderPaletteList(m) {
   const list = R('pal-list');
   if (!list) return;
   list.innerHTML = m.items.length
-    ? m.items.map((it, i) => '<li class="wb-pal-it" role="option" id="wb-pal-' + i + '" data-act="pal-run" data-i="' + i + '" aria-selected="' + (i === m.active) + '">' +
-      '<span class="wb-pal-g">' + esc(it.g) + '</span><span class="wb-pal-l">' + esc(it.l) + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</span>' +
-      '<span class="wb-pal-keys">' + it.keys.map((k) => kbd(k)).join('') + '</span></li>').join('')
+    ? m.items.map((it, i) => {
+      const head = paletteHeading(m.items, i);
+      return (head ? '<li class="wb-pal-h" role="presentation">' + head + '</li>' : '') +
+      '<li class="wb-pal-it" role="option" id="wb-pal-' + i + '" data-act="pal-run" data-i="' + i + '" aria-selected="' + (i === m.active) + '">' +
+      '<span class="wb-pal-l">' + esc(it.l) + (it.sub ? '<small>' + esc(it.sub) + '</small>' : '') + '</span>' +
+      '<span class="wb-pal-keys">' + it.keys.map((k) => kbd(k)).join('') + '</span></li>';
+    }).join('')
     : '<li class="wb-pal-empty">No matches</li>';
   const inp = R('modal').querySelector('[data-fk="pal-q"]');
   if (inp) { if (m.items.length) inp.setAttribute('aria-activedescendant', 'wb-pal-' + m.active); else inp.removeAttribute('aria-activedescendant'); }

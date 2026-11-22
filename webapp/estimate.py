@@ -7,7 +7,8 @@ the Full Detail sheet of a real run.
 
 Timings: ENRICH_SECS, VALIDATE_SECS, EPO_SECS and BATCH_OVERHEAD_SECS were
 measured (BATCH_OVERHEAD_SECS once, on a 4-request batch); CLASSIFY_DIRECT_SECS
-is an assumption. Per-company LLM steps run on DEFAULT_WORKERS workers; EPO
+is an assumption. Per-company LLM steps run on the run's workers
+(concurrency.workers, DEFAULT_WORKERS when not set); EPO
 lookups are capped by EPO's search quota whatever the worker count, so they
 set the floor for large runs.
 """
@@ -52,13 +53,22 @@ def _search_step_cost(tokens_per_search: Tuple[int, int], searches: int, rates: 
     return searches * (_token_cost(tokens_per_search, rates) + rates.get("web_search", 0.0))
 
 
-def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
+def estimate(
+    settings: Dict[str, Any],
+    rows: int,
+    batch_min: int = DEFAULT_BATCH_MIN_COMPANIES,
+    workers: int = DEFAULT_WORKERS,
+) -> Dict[str, Any]:
     """
     Estimated cost (USD) and duration (seconds) of classifying `rows` companies.
 
     Args:
         settings: Output of settings_map.clean_settings.
         rows: Number of companies in the run.
+        batch_min: The fewest companies that use a batch job
+            (settings_map.batch_min_companies of the run's base config).
+        workers: Companies processed at once (pipeline.parallel.workers_from
+            of the run's base config).
 
     Returns:
         known: False when the model has no listed price; cost is then None.
@@ -70,9 +80,10 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
             mapped: a pin names an exact model.
         pinned: True when `model` came from the pin.
         batch: True when the run would use a batch job: batching is on, the
-            provider supports it and rows is at least DEFAULT_BATCH_MIN_COMPANIES.
+            provider supports it and rows is at least batch_min.
+        batchMin: batch_min, so the page can say why batch mode has no effect.
         cost: Sum of parts, or None when not known.
-        secs: Estimated duration, with DEFAULT_WORKERS workers.
+        secs: Estimated duration, with `workers` workers.
         parts: USD per run for classify, enrich and validate.
     """
     rows = max(int(rows), 0)
@@ -90,7 +101,7 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
     batch = (
         bool(settings["batch"])
         and provider in BATCH_PROVIDERS
-        and rows >= DEFAULT_BATCH_MIN_COMPANIES
+        and rows >= batch_min
     )
 
     classify = rows * _token_cost(CLASSIFIER_TOKENS, rates)
@@ -111,7 +122,7 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         )
 
     # Patent lookups and enrichment run side by side; the slower one sets the time.
-    workers = DEFAULT_WORKERS
+    workers = max(int(workers), 1)
     gather_secs = max(
         rows * EPO_SECS if settings["epo"] else 0,
         rows * ENRICH_SECS / workers if settings["enrichment"] else 0,
@@ -127,6 +138,7 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         "pricedAs": priced_as,
         "pinned": pinned is not None,
         "batch": batch,
+        "batchMin": batch_min,
         "cost": sum(parts.values()) if known else None,
         "secs": secs,
         "parts": parts,
@@ -157,12 +169,14 @@ def _whole_rows(rows: Any) -> int:
     return rows
 
 
-def estimate_request(body: Any) -> Dict[str, Any]:
+def estimate_request(
+    body: Any, batch_min: int = DEFAULT_BATCH_MIN_COMPANIES, workers: int = DEFAULT_WORKERS
+) -> Dict[str, Any]:
     """
     The estimate for the raw JSON body of POST /api/estimate.
 
     body["settings"] goes through clean_settings (missing means defaults);
-    body["rows"] is required.
+    body["rows"] is required. batch_min and workers as for estimate.
 
     Raises:
         EstimateError: body is not an object, the provider or tier is unknown,
@@ -177,4 +191,4 @@ def estimate_request(body: Any) -> Dict[str, Any]:
         settings = clean_settings(body.get("settings", {}))
     except ValueError as exc:
         raise EstimateError(str(exc)) from exc
-    return estimate(settings, rows)
+    return estimate(settings, rows, batch_min, workers)

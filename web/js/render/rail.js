@@ -71,5 +71,5 @@ export function renderRailFoot() {
     : '';
   R('railfoot').innerHTML = '<div class="wb-keys-h">API keys (.env)</div>' + keys +
     '<div class="wb-foot-btns"><button class="wb-btn wb-btn-sm" data-act="help" data-fk="foot-help">Shortcuts ' + kbd('?') + '</button>' +
-    '<button class="wb-btn wb-btn-sm" data-act="palette" data-fk="foot-palette">Command menu <span>' + kbd(MOD, 'K') + '</span></button></div>';
+    '<button class="wb-btn wb-btn-sm" data-act="palette" data-fk="foot-palette"><span class="wb-foot-l">Command menu</span><span class="wb-foot-s">Commands</span> <span>' + kbd(MOD, 'K') + '</span></button></div>';
 }

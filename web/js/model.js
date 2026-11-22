@@ -291,8 +291,28 @@ export function formProblem(view, form) {
   if (needsNote(view, form.choice) && !form.note.trim()) return 'A note is required to overturn a Clear verdict. It is written to the workbook.';
   return '';
 }
+/* The form's hint {tone, text}. tone 'ok' (text empty: the caller shows its
+   own line), 'pending' (a quiet instruction while the form is incomplete)
+   or 'error' (form.tried: Record was attempted while incomplete). */
+export function formHint(view, form) {
+  const prob = formProblem(view, form);
+  if (!prob) return { tone: 'ok', text: '' };
+  if (form.tried) return { tone: 'error', text: prob };
+  if (needsNote(view, form.choice)) return { tone: 'pending', text: 'Add a note to change a Clear verdict. It is written to the workbook.' };
+  return { tone: 'pending', text: prob };
+}
 
 /* ---------- new run setup ---------- */
+/* What to do about a missing API key. The server reads .env only when it
+   starts, so a reload is not enough. */
+export const missingKeyText = (keyVar) => 'Add ' + keyVar + ' to the .env file in the project folder, then restart the app (python serve.py).';
+/* A setup row's Status cell before Start: nothing is queued yet. */
+export const setupRowStatus = (out) => (out ? 'Left out' : '');
+/* A note under a quick-settings step, or null. setup is GET /api/setup. */
+export function quickStepNote(key, setup) {
+  if (key === 'epo' && !setup.epoKeysSet) return { warn: true, text: 'EPO keys missing, so the run continues without patents.' };
+  return null;
+}
 /* Rows of an uploaded file left blank in the mapped company name column; the
    pipeline skips them. file is the inspect dict from POST /api/files. */
 export const skippedCount = (file, mapping) => file.emptyCounts[mapping.company_name] || 0;
@@ -327,7 +347,7 @@ export function startProblem(draft, setup) {
   if (!tickedCount(draft)) return { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' };
   const p = setup.providers.find((x) => x.id === d.provider);
   if (!p) return { fix: 'sheet', label: 'Choose a provider to start', text: 'The selected provider is not available. Choose another provider in Analyst settings.' };
-  if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: 'Ask your admin to add ' + p.keyVar + ' to .env, or choose another provider in Analyst settings.' };
+  if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: missingKeyText(p.keyVar) + ' Or choose another provider in Analyst settings.' };
   return null;
 }
 
@@ -343,7 +363,8 @@ export const SETUP_FIELDS = Object.freeze([
 /* A new draft run (S.draft). setup is GET /api/setup; fromRun, for "Same
    settings…", a RunSummary whose settings are copied over the defaults. The
    cfg never shares objects with either. Besides cfg, file and excluded
-   (see startProblem): fromId names the run it came from; limit is the setup
+   (see startProblem): fromId names the run it came from and fromFile its file
+   name (reuseOffer); limit is the setup
    table's row window (visibleRows); reading is the name of the file being
    uploaded and error the last upload's rejection; est is the last
    POST /api/estimate answer, estFailed true when the latest request for one
@@ -354,9 +375,18 @@ export function newDraft(setup, fromRun) {
   const cfg = Object.assign(copy(setup.defaults), fromRun ? copy(fromRun.settings) : {});
   cfg.mapping = Object.assign({}, cfg.mapping);
   return {
-    cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null, limit: ROW_WINDOW,
+    cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null,
+    fromFile: (fromRun && fromRun.file) || null, limit: ROW_WINDOW,
     reading: '', error: '', est: null, estFailed: false, startError: '',
   };
+}
+
+/* What a "Same settings…" draft offers to load before any file: its run's
+   own file ({ name, runId }, POST /api/runs/{runId}/file), while no file is
+   loaded or being read. null for a fresh draft. */
+export function reuseOffer(draft) {
+  if (!draft || !draft.fromId || !draft.fromFile || draft.file || draft.reading) return null;
+  return { name: draft.fromFile, runId: draft.fromId };
 }
 
 /* The mapping to use with a newly loaded file (the inspect dict). A fresh
@@ -425,10 +455,25 @@ export function tierPriceText(cost) {
 }
 /* Why batch mode is off for provider prov: the providers that have it, or
    none. providers: GET /api/setup providers[] ({label, batch}). */
+/* How a run that classifies directly goes through the companies, from
+   setup's workers (concurrency.workers; 8 when unknown): "up to 8 companies
+   at a time", or "one company at a time" when it is 1. */
+export function directRunText(workers) {
+  const n = workers || 8;
+  return n === 1 ? 'one company at a time' : 'up to ' + n + ' companies at a time';
+}
+/* Under the Batch mode toggle when the run is too small for a batch job:
+   rows ticked companies, batchMin the server's threshold (GET /api/setup
+   batchMinCompanies, as pipeline/orchestrator.py applies it). Null when
+   batch would apply, or before any company is ticked. */
+export function batchSmallRunText(rows, batchMin) {
+  if (!rows || rows >= batchMin) return null;
+  return 'Batch jobs start at ' + batchMin.toLocaleString('en-US') + ' companies. This run has ' + rows.toLocaleString('en-US') + ', so it runs directly and this setting changes nothing.';
+}
 export function noBatchText(providers, prov) {
   const labels = providers.filter((p) => p.batch).map((p) => p.label);
   if (!labels.length) return 'Batch jobs are not available.';
-  return 'Only ' + labels.join(' and ') + (labels.length === 1 ? ' supports' : ' support') + ' batch jobs; ' + prov.label + ' works one company at a time.';
+  return 'Only ' + labels.join(' and ') + (labels.length === 1 ? ' supports' : ' support') + ' batch jobs; ' + prov.label + ' classifies each company directly.';
 }
 /* The setup head's file line (text): '1 row · 0 skipped (empty name) · 1 column'. */
 export const fileLine = (file, mapping) => countOf(file.rows, 'row', 'rows') + ' · ' + skippedCount(file, mapping).toLocaleString('en-US') + ' skipped (empty name) · ' + countOf(file.headers.length, 'column', 'columns');
@@ -455,6 +500,12 @@ export function draftRailLine(draft) {
 export function extraColumns(headers, mapping) {
   const used = Object.values(mapping).filter(Boolean);
   return headers.filter((h) => used.indexOf(h) < 0);
+}
+/* The extra columns to name in the setup note: the first max, and how many
+   more. "and 1 more" is never said, as naming that one is just as short. */
+export function extraColumnsShort(extra, max) {
+  if (extra.length <= max + 1) return { shown: extra.slice(), more: 0 };
+  return { shown: extra.slice(0, max), more: extra.length - max };
 }
 /* The warning when no description column is mapped; '' when one is. */
 export function noDescriptionNote(cfg) {
@@ -505,6 +556,13 @@ export function pinUnpriced(model, pricedModels) {
 }
 
 /* ---------- command menu ---------- */
+/* The command menu's heading above items[i] when a group starts there, else
+   null. Rows no longer carry their group name. */
+const PAL_HEADS = { Action: 'Actions', Run: 'Runs', Company: 'Companies' };
+export function paletteHeading(items, i) {
+  if (i > 0 && items[i - 1].g === items[i].g) return null;
+  return PAL_HEADS[items[i].g] || items[i].g;
+}
 /* The command menu's items for search q, in order: the actions (cmds
    entries with an act and not menu: false; while setting up only those
    marked setup), then "Reset the evidence panel width" (not while setting
@@ -582,3 +640,60 @@ export function parseUi(raw) {
 }
 /* The fields of state s that are stored under 'dtc.ui'. */
 export const uiToStore = (s) => ({ detailW: s.detailW, reading: s.reading, collapsed: s.collapsed });
+
+/* The row to select after the user changed filters, search or sort:
+   selected while it is still among ids (the view), else the first visible
+   row, or null when nothing is visible. */
+export function keptSelection(selected, ids) {
+  if (selected != null && ids.indexOf(selected) >= 0) return selected;
+  return ids.length ? ids[0] : null;
+}
+
+/* What Esc does to the new run's draft once no popover is open: 'none'
+   while Start is in flight (or without a draft), 'discard' when no file is
+   loaded or uploading (nothing to lose), else 'park' (kept in the rail). */
+export function setupEscapeAction(draft) {
+  if (!draft || draft.starting) return 'none';
+  return draft.file || draft.reading ? 'park' : 'discard';
+}
+/* Whether the Cancel button shows the Esc hint: only when Esc discards too. */
+export function cancelHintsEsc(draft) {
+  return setupEscapeAction(draft) === 'discard';
+}
+
+/* ---------- small screens ----------
+   Below 900px the three columns do not fit: the main column takes the width,
+   the run rail becomes a drawer and the evidence panel opens over the table.
+   NARROW_QUERY is the media query the JS watches; styles.css uses the same
+   @media (width < 900px). A range rather than max-width: 899px, because a
+   zoomed window can be 899.5px wide and would match neither layout. */
+export const NARROW_BELOW = 900;
+export const NARROW_QUERY = '(width < ' + NARROW_BELOW + 'px)';
+export const isNarrow = (width) => width < NARROW_BELOW;
+
+/* What Esc closes when no field, overlay or setup takes it, from
+   {narrow, drawer, panel, reading, form} (form: the selected row's decision
+   form is open). Wide: reading view, then the form. Narrow: the run drawer,
+   then the form, then the evidence panel; reading view has no meaning in one
+   column. null: nothing to close. */
+export function escapeTarget(st) {
+  if (st.narrow && st.drawer) return 'drawer';
+  if (!st.narrow && st.reading) return 'reading';
+  if (st.form) return 'form';
+  if (st.narrow && st.panel) return 'panel';
+  return null;
+}
+
+/* Whether the evidence panel is open after a row is selected, from
+   {narrow, panel, pick}. pick: the user chose the row (click, Enter, the
+   command menu); otherwise it was a move (J, K, N, Home, End), which keeps
+   the panel as it was so the list can be browsed without it. Only narrow
+   windows open the panel; wide ones always show it as a column. */
+export const panelAfterSelect = (st) => !!st.narrow && (!!st.pick || !!st.panel);
+
+/* What E does, from {narrow, panel}: reading view when wide; when narrow the
+   panel already takes the whole width, so E shows or hides it instead. */
+export function readingKeyAction(st) {
+  if (!st.narrow) return 'reading';
+  return st.panel ? 'close-panel' : 'open-panel';
+}

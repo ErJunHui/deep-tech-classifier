@@ -6,11 +6,14 @@ import {
   formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
   pushUndo, popUndo, decisionVerdict, editChoice, changeChoice, recordToast, restoreToast, undoToast,
   decisionErrorPlace, undoFailureKeeps, busyNotice,
-  tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
+  tickedCount, newDraft, reuseOffer, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
+  keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote, batchSmallRunText,
+  extraColumnsShort, paletteHeading, directRunText,
+  NARROW_BELOW, NARROW_QUERY, isNarrow, escapeTarget, panelAfterSelect, readingKeyAction,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -626,6 +629,23 @@ test('newDraft: "Same settings…" copies the run settings over the defaults, ne
   assert.equal(run.settings.mapping.company_name, 'Name');
   assert.equal(d.file, null);
 });
+test('newDraft: a fresh draft has no file to reuse; "Same settings…" keeps the run’s file name', () => {
+  assert.equal(newDraft(SETUP_INFO, null).fromFile, null);
+  assert.equal(newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} }).fromFile, 'companies.xlsx');
+  assert.equal(newDraft(SETUP_INFO, { id: 'run_1', settings: {} }).fromFile, null);
+});
+test('reuseOffer: a "Same settings…" draft with no file offers the run’s file', () => {
+  const d = newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} });
+  assert.deepEqual(reuseOffer(d), { name: 'companies.xlsx', runId: 'run_1' });
+});
+test('reuseOffer: none for a fresh draft, a loaded file, a file being read, or a run with no file name', () => {
+  assert.equal(reuseOffer(newDraft(SETUP_INFO, null)), null);
+  const d = newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} });
+  assert.equal(reuseOffer(Object.assign({}, d, { file: { name: 'companies.xlsx' } })), null);
+  assert.equal(reuseOffer(Object.assign({}, d, { reading: 'companies.xlsx' })), null);
+  assert.equal(reuseOffer(newDraft(SETUP_INFO, { id: 'run_1', settings: {} })), null);
+  assert.equal(reuseOffer(null), null);
+});
 test('mappingForFile: a fresh draft takes the detected mapping', () => {
   const file = upload();
   const m = mappingForFile({ company_name: 'Old' }, file, false);
@@ -698,6 +718,12 @@ test('unknownCostLine: why the cost is unknown, pinned or not; empty when known'
 test('extraColumns: headers no field reads, in file order', () => {
   assert.deepEqual(extraColumns(['Company', 'About', 'City', 'Funding'], { company_name: 'Company', description: 'About', uen: '' }), ['City', 'Funding']);
   assert.deepEqual(extraColumns(['A'], { company_name: 'A' }), []);
+});
+test('extraColumnsShort: up to max names, then a count of the rest', () => {
+  assert.deepEqual(extraColumnsShort(['A', 'B'], 3), { shown: ['A', 'B'], more: 0 });
+  assert.deepEqual(extraColumnsShort(['A', 'B', 'C', 'D'], 3), { shown: ['A', 'B', 'C', 'D'], more: 0 });
+  assert.deepEqual(extraColumnsShort(['A', 'B', 'C', 'D', 'E'], 3), { shown: ['A', 'B', 'C'], more: 2 });
+  assert.deepEqual(extraColumnsShort([], 3), { shown: [], more: 0 });
 });
 test('noDescriptionNote: wording depends on enrichment; empty when a description is mapped', () => {
   assert.equal(noDescriptionNote({ mapping: { description: 'About' }, enrichment: true, lowEvidenceCap: 60 }), '');
@@ -781,6 +807,10 @@ test('paletteItems: while setting up, only setup actions and the runs; no run is
     ['Run', 'pilot.xlsx'], ['Run', 'companies.xlsx'],
   ]);
   assert.ok(items.every((it) => !it.keys.includes('current')));
+});
+test('paletteHeading: a plural heading where a group starts, null inside a group', () => {
+  const items = [{ g: 'Action' }, { g: 'Action' }, { g: 'Run' }, { g: 'Company' }, { g: 'Company' }];
+  assert.deepEqual(items.map((it, i) => paletteHeading(items, i)), ['Actions', null, 'Runs', 'Companies', null]);
 });
 test('paletteItems: no open run lists no companies', () => {
   assert.equal(paletteItems('', palCtx({ rows: null, activeId: null })).filter((it) => it.g === 'Company').length, 0);
@@ -871,10 +901,15 @@ test('noBatchText: the batch providers, or none available', () => {
   const ant = { id: 'anthropic', label: 'Anthropic', batch: true };
   const oai = { id: 'openai', label: 'OpenAI', batch: false };
   const gem = { id: 'gemini', label: 'Google Gemini', batch: false };
-  assert.equal(noBatchText([ant, oai], oai), 'Only Anthropic supports batch jobs; OpenAI works one company at a time.');
+  assert.equal(noBatchText([ant, oai], oai), 'Only Anthropic supports batch jobs; OpenAI classifies each company directly.');
   assert.equal(noBatchText([oai, gem], oai), 'Batch jobs are not available.');
   assert.equal(noBatchText([], oai), 'Batch jobs are not available.');
-  assert.equal(noBatchText([ant, Object.assign({}, gem, { batch: true }), oai], oai), 'Only Anthropic and Google Gemini support batch jobs; OpenAI works one company at a time.');
+  assert.equal(noBatchText([ant, Object.assign({}, gem, { batch: true }), oai], oai), 'Only Anthropic and Google Gemini support batch jobs; OpenAI classifies each company directly.');
+});
+test('directRunText: the configured worker count, singular at one, default 8 when unknown', () => {
+  assert.equal(directRunText(8), 'up to 8 companies at a time');
+  assert.equal(directRunText(1), 'one company at a time');
+  assert.equal(directRunText(undefined), 'up to 8 companies at a time');
 });
 test('startProblem: a file being read blocks the start, named on the button', () => {
   const draft = named([]);
@@ -906,4 +941,135 @@ test('startRequest: the exclude list sent and its count, unchanged by later tick
   d2.excluded.add(2); // ticked out while the request is in flight
   assert.deepEqual(r2, { exclude: [0], n: 1 });
   assert.deepEqual(startRequest(named([])), { exclude: [], n: 2 });
+});
+
+/* ---------- selection after a filter change ---------- */
+test('keptSelection: a row still in view stays selected', () => {
+  assert.equal(keptSelection(2, [3, 2, 4]), 2);
+  assert.equal(keptSelection(0, [0]), 0);
+});
+test('keptSelection: a row the filters hide gives way to the first visible row', () => {
+  assert.equal(keptSelection(1, [2]), 2);
+  assert.equal(keptSelection(null, [4, 1]), 4);
+});
+test('keptSelection: an empty view selects nothing', () => {
+  assert.equal(keptSelection(1, []), null);
+  assert.equal(keptSelection(null, []), null);
+});
+
+/* ---------- Esc while setting up a new run ---------- */
+const draftWith = (o) => Object.assign({ file: null, reading: '', starting: false }, o);
+test('setupEscapeAction: an empty draft is discarded; there is nothing to lose', () => {
+  assert.equal(setupEscapeAction(draftWith({})), 'discard');
+});
+test('setupEscapeAction: a draft with a file, or one still uploading, is parked', () => {
+  assert.equal(setupEscapeAction(draftWith({ file: { name: 'a.xlsx' } })), 'park');
+  assert.equal(setupEscapeAction(draftWith({ reading: 'a.xlsx' })), 'park');
+});
+test('setupEscapeAction: nothing while Start is in flight or without a draft', () => {
+  assert.equal(setupEscapeAction(draftWith({ file: { name: 'a.xlsx' }, starting: true })), 'none');
+  assert.equal(setupEscapeAction(null), 'none');
+});
+test('cancelHintsEsc: the Cancel button shows Esc only when Esc would also discard', () => {
+  assert.equal(cancelHintsEsc(draftWith({})), true);
+  assert.equal(cancelHintsEsc(draftWith({ file: { name: 'a.xlsx' } })), false);
+});
+
+/* ---------- decision form hint (#6) ---------- */
+test('formHint: a missing note is a quiet instruction until Record is tried', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  const quiet = formHint(clear, { choice: 'change', note: '' });
+  assert.equal(quiet.tone, 'pending');
+  assert.equal(quiet.text, 'Add a note to change a Clear verdict. It is written to the workbook.');
+  const tried = formHint(clear, { choice: 'change', note: '', tried: true });
+  assert.equal(tried.tone, 'error');
+  assert.equal(tried.text, 'A note is required to overturn a Clear verdict. It is written to the workbook.');
+});
+test('formHint: no outcome yet is pending, then an error once tried', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  assert.deepEqual(formHint(clear, { choice: '', note: '' }), { tone: 'pending', text: 'Choose an outcome.' });
+  assert.deepEqual(formHint(clear, { choice: '', note: '', tried: true }), { tone: 'error', text: 'Choose an outcome.' });
+});
+test('formHint: a complete form is ok and has no problem text', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  assert.deepEqual(formHint(clear, { choice: 'change', note: 'Has a lab.', tried: true }), { tone: 'ok', text: '' });
+});
+
+/* ---------- missing key wording (#8) ---------- */
+test('missingKeyText: names the file and says to restart the app, not to ask an admin', () => {
+  const t = missingKeyText('ANTHROPIC_API_KEY');
+  assert.equal(t, 'Add ANTHROPIC_API_KEY to the .env file in the project folder, then restart the app (python serve.py).');
+});
+test('startProblem: a missing key uses the restart wording and offers another provider', () => {
+  const draft = named([]);
+  const setup = { providers: [{ id: 'openai', label: 'OpenAI', keyVar: 'OPENAI_API_KEY', keySet: false, batch: false }] };
+  const p = startProblem(draft, setup);
+  assert.equal(p.text, missingKeyText('OPENAI_API_KEY') + ' Or choose another provider in Analyst settings.');
+  assert.doesNotMatch(p.text, /admin/);
+});
+
+/* ---------- setup row status (#5) ---------- */
+test('setupRowStatus: nothing is queued before Start; only left-out rows say so', () => {
+  assert.equal(setupRowStatus(false), '');
+  assert.equal(setupRowStatus(true), 'Left out');
+});
+
+/* ---------- quick settings: patent lookup without EPO keys (#7) ---------- */
+test('quickStepNote: patent lookup warns when the EPO keys are missing', () => {
+  assert.deepEqual(quickStepNote('epo', { epoKeysSet: false }), { warn: true, text: 'EPO keys missing, so the run continues without patents.' });
+  assert.equal(quickStepNote('epo', { epoKeysSet: true }), null);
+  assert.equal(quickStepNote('enrichment', { epoKeysSet: false }), null);
+});
+
+/* ---------- batch mode on a run too small to batch (#3) ---------- */
+test('batchSmallRunText: explains that a run under the threshold classifies directly', () => {
+  assert.equal(batchSmallRunText(4, 100), 'Batch jobs start at 100 companies. This run has 4, so it runs directly and this setting changes nothing.');
+  assert.equal(batchSmallRunText(1, 100), 'Batch jobs start at 100 companies. This run has 1, so it runs directly and this setting changes nothing.');
+});
+test('batchSmallRunText: null at or above the threshold, or before any company is ticked', () => {
+  assert.equal(batchSmallRunText(100, 100), null);
+  assert.equal(batchSmallRunText(5000, 100), null);
+  assert.equal(batchSmallRunText(0, 100), null);
+});
+test('batchSmallRunText: formats large thresholds', () => {
+  assert.equal(batchSmallRunText(12, 1500), 'Batch jobs start at 1,500 companies. This run has 12, so it runs directly and this setting changes nothing.');
+});
+
+/* ---------- small screens (#9) ---------- */
+test('isNarrow: below 900px the workbench is one column; NARROW_QUERY matches the CSS', () => {
+  assert.equal(NARROW_BELOW, 900);
+  // A range, not max-width: 899px, so a zoomed window 899.5px wide is not left in between.
+  assert.equal(NARROW_QUERY, '(width < 900px)');
+  assert.equal(isNarrow(390), true);
+  assert.equal(isNarrow(899), true);
+  assert.equal(isNarrow(899.5), true);
+  assert.equal(isNarrow(900), false);
+  assert.equal(isNarrow(1024), false);
+});
+test('escapeTarget: wide keeps the old order, reading view then the form', () => {
+  const wide = { narrow: false, drawer: false, panel: false };
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: true, form: true })), 'reading');
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: false, form: true })), 'form');
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: false, form: false })), null);
+  // A panel flag left over from a narrow window does nothing when wide.
+  assert.equal(escapeTarget(Object.assign({}, wide, { panel: true })), null);
+});
+test('escapeTarget: narrow closes the drawer, then the form, then the evidence panel', () => {
+  const n = { narrow: true, drawer: false, panel: true, reading: true, form: true };
+  assert.equal(escapeTarget(Object.assign({}, n, { drawer: true })), 'drawer');
+  // Reading view has no meaning in one column, so it never takes an Esc.
+  assert.equal(escapeTarget(n), 'form');
+  assert.equal(escapeTarget(Object.assign({}, n, { form: false })), 'panel');
+  assert.equal(escapeTarget(Object.assign({}, n, { form: false, panel: false })), null);
+});
+test('panelAfterSelect: a pick opens the panel when narrow; J and K keep it as it is', () => {
+  assert.equal(panelAfterSelect({ narrow: true, panel: false, pick: true }), true);
+  assert.equal(panelAfterSelect({ narrow: true, panel: false, pick: false }), false);
+  assert.equal(panelAfterSelect({ narrow: true, panel: true, pick: false }), true);
+  assert.equal(panelAfterSelect({ narrow: false, panel: false, pick: true }), false);
+});
+test('readingKeyAction: E is reading view when wide, and shows or hides the panel when narrow', () => {
+  assert.equal(readingKeyAction({ narrow: false, panel: false }), 'reading');
+  assert.equal(readingKeyAction({ narrow: true, panel: false }), 'open-panel');
+  assert.equal(readingKeyAction({ narrow: true, panel: true }), 'close-panel');
 });

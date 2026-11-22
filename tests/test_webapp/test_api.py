@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from tests.test_webapp import fake_classify  # noqa: E402
 from webapp import files  # noqa: E402
 from webapp.app import create_app  # noqa: E402
+from webapp.estimate import estimate_request  # noqa: E402
 from webapp.decisions import CLEAR_NOTE_REQUIRED  # noqa: E402
 
 FAKE = [sys.executable, str(Path(__file__).resolve().parent / "fake_classify.py")]
@@ -171,6 +172,23 @@ class ApiTest(unittest.TestCase):
         r = self.client.post("/api/estimate", content=b"{not json", headers={"content-type": "application/json"})
         self.assertIn(r.status_code, (400, 422))
 
+    def test_setup_and_estimate_use_the_same_batch_threshold(self):
+        threshold = self.client.get("/api/setup").json()["batchMinCompanies"]
+        r = self.client.post("/api/estimate", json={"settings": {"batch": True}, "rows": 4})
+        self.assertEqual(r.json()["batchMin"], threshold)
+
+    def test_setup_reports_the_configured_workers(self):
+        project = Path(tempfile.mkdtemp(dir=self.tmp))
+        (project / "config.json").write_text(json.dumps({"concurrency": {"workers": 3}}), encoding="utf-8")
+        (project / "web").mkdir()  # the app serves it
+        client = TestClient(create_app(project, Path(tempfile.mkdtemp(dir=self.tmp)), runner_command=FAKE))
+        with client:
+            self.assertEqual(client.get("/api/setup").json()["workers"], 3)
+            # The estimate's run time uses the same worker count.
+            body = {"settings": {"epo": False, "batch": False}, "rows": 100}
+            secs = client.post("/api/estimate", json=body).json()["secs"]
+            self.assertAlmostEqual(secs, estimate_request(body, workers=3)["secs"])
+
     # --- runs ---
 
     def test_upload_then_start_then_poll_to_complete(self):
@@ -278,6 +296,31 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(run["total"], 3)
         data = self._wait_ended(run["id"])
         self.assertEqual([row["name"] for row in data["rows"]], ["Company 0", "Company 2", "Company 4"])
+
+    def test_run_file_is_offered_again_as_a_new_upload(self):
+        # "Same settings…": the run's own input (its ticked rows only) becomes a new upload.
+        run = self._start(5, exclude=[1, 3])
+        self._wait_ended(run["id"])
+        r = self.client.post(f"/api/runs/{run['id']}/file")
+        self.assertEqual(r.status_code, 200, r.text)
+        info = r.json()
+        self.assertEqual(info["name"], "companies.xlsx")
+        self.assertEqual(info["rows"], 3)
+        self.assertEqual([row[0] for row in info["table"]], ["Company 0", "Company 2", "Company 4"])
+        self.assertEqual(info["mapping"]["company_name"], "Company")
+        again = self.client.post("/api/runs", json={"fileId": info["fileId"], "settings": SETTINGS})
+        self.assertEqual(again.status_code, 201, again.text)
+        self.assertEqual(again.json()["total"], 3)
+
+    def test_run_file_is_404_for_an_unknown_run_or_a_missing_input(self):
+        self.assertEqual(self.client.post("/api/runs/run_19990101_000000/file").status_code, 404)
+        run = self._start(2)
+        self._wait_ended(run["id"])
+        folder = Path(self.client.app.state.store.run_dir(run["id"]))
+        (folder / "input" / "companies.xlsx").unlink()
+        r = self.client.post(f"/api/runs/{run['id']}/file")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["detail"], "This run's file is no longer available. Please choose the file again.")
 
     def test_stop_and_resume_roundtrip(self):
         os.environ["FAKE_DELAY_S"] = "0.5"

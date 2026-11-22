@@ -4,10 +4,10 @@
    sheetBodyHtml. It is a modal dialog: S.analyst is true while it is open,
    global shortcuts are off, Tab stays inside it (trapTab) and closing it
    returns focus to the control that opened it. */
-import { esc, money, fmtDur, startProblem, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
+import { esc, money, fmtDur, startProblem, missingKeyText, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS, directRunText } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
-import { QUALITY, draftProvider, batchOffText, closePop, openSettings } from './setup.js';
+import { QUALITY, draftProvider, batchOffText, batchSmallText, closePop, openSettings } from './setup.js';
 
 const THRESHOLDS = [
   { key: 'validatorThreshold', label: 'Validation threshold', help: 'Validator runs below this confidence', needs: 'validator' },
@@ -30,11 +30,17 @@ export function openAnalyst(from) {
   clearTimeout(closeTimer);
   S.analyst = true;
   ret = from || 'settings';
-  R('overlay').innerHTML = '<div class="wb-scrim" data-act="analyst-close"></div>' +
-    '<section class="wb-sheet" role="dialog" aria-modal="true" aria-labelledby="wb-sh-t">' +
-    '<div class="wb-sh-head"><div class="wb-sh-title"><h2 id="wb-sh-t">Analyst settings</h2><button class="wb-btn wb-btn-sm" data-act="analyst-close" data-fk="sh-close">Done ' + kbd('Esc') + '</button></div>' +
-    '<p class="wb-sh-sub">Everything the pipeline can be tuned with. The defaults suit most runs.</p><div data-r="sh-est"></div></div>' +
-    '<div class="wb-sh-body" data-r="sh-body"></div></section>';
+  const ov = R('overlay');
+  // A sheet still closing is reused, so it turns around from where it is.
+  if (!ov.querySelector('.wb-sheet')) {
+    ov.innerHTML = '<div class="wb-scrim" data-act="analyst-close"></div>' +
+      '<section class="wb-sheet" role="dialog" aria-modal="true" aria-labelledby="wb-sh-t">' +
+      '<div class="wb-sh-head"><div class="wb-sh-title"><h2 id="wb-sh-t">Analyst settings</h2><button class="wb-btn wb-btn-sm" data-act="analyst-close" data-fk="sh-close">Done ' + kbd('Esc') + '</button></div>' +
+      '<p class="wb-sh-sub">Everything the pipeline can be tuned with. The defaults suit most runs.</p><div data-r="sh-est"></div></div>' +
+      '<div class="wb-sh-body" data-r="sh-body"></div></section>';
+    void ov.offsetWidth; // commit the closed state so adding is-open transitions
+  }
+  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.add('is-open'));
   renderAnalyst();
   const f = R('overlay').querySelector('input[name="wb-prov"]:checked') || R('overlay').querySelector('[data-fk="sh-close"]');
   if (f) f.focus();
@@ -46,8 +52,9 @@ export function closeAnalyst(restore) {
   if (!S.analyst) return;
   S.analyst = false;
   const ov = R('overlay');
-  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.add('is-leaving'));
+  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.remove('is-open'));
   clearTimeout(closeTimer);
+  // After the 160ms close transition (styles.css .wb-sheet).
   closeTimer = setTimeout(() => { if (!S.analyst) ov.innerHTML = ''; }, 170);
   if (restore === false || !setupShown()) return;
   if (ret === 'analyst-open') openSettings();
@@ -92,7 +99,7 @@ function estHtml() {
     '<div><div class="wb-est-l">Duration</div><div class="wb-est-v">' + (e ? fmtDur(e.secs) : none) + '</div></div>' +
     '<div class="wb-est-split">' + split + '</div>' +
     (prob ? '<div class="wb-est-why">' + esc(prob.label) + '</div>' : '') +
-    '<div class="wb-est-note">' + esc(model) + ' · ' + (batch ? 'batch mode halves classifier cost; a real batch job can take up to an hour' : 'one company at a time') + ' · web searches are usually the largest part of the bill</div>' +
+    '<div class="wb-est-note">' + esc(model) + ' · ' + (batch ? 'batch mode halves classifier cost; a real batch job can take up to an hour' : directRunText(S.setup.workers)) + ' · web searches are usually the largest part of the bill</div>' +
     (e ? '<div class="wb-est-note">' + esc(estimateNote(e)) + '</div>' : '') + '</div>';
 }
 
@@ -100,7 +107,7 @@ function bodyHtml() {
   const d = S.draft.cfg; const prov = draftProvider(); const setup = S.setup;
   let h = '<fieldset class="wb-fs"><legend>Model</legend><div class="wb-provs" role="radiogroup" aria-label="Provider">' + setup.providers.map((p) =>
     '<label class="wb-opt"><input type="radio" name="wb-prov" value="' + esc(p.id) + '" data-fk="prov-' + esc(p.id) + '"' + (p.id === d.provider ? ' checked' : '') + '><span class="wb-opt-t">' + esc(p.label) + '</span><span class="wb-opt-s ' + (p.keySet ? 'is-ok' : 'is-miss') + '">' + (p.keySet ? 'Key set' : esc(p.keyVar) + ' missing') + '</span></label>').join('') + '</div>';
-  if (prov && !prov.keySet) h += '<div class="wb-warn">' + esc(prov.label) + ' is not set up yet. Ask your admin to add ' + esc(prov.keyVar) + ' to .env, then reload.</div>';
+  if (prov && !prov.keySet) h += '<div class="wb-warn">' + esc(prov.label) + ' is not set up yet. ' + esc(missingKeyText(prov.keyVar)) + '</div>';
   if (prov) {
     h += '<div class="wb-tiers" role="radiogroup" aria-label="Tier">' + QUALITY.map((q) =>
       '<label class="wb-opt"><input type="radio" name="wb-tier" value="' + q.tier + '" data-fk="tier-' + q.tier + '"' + (q.tier === d.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + ' · ' + esc(prov.tiers[q.tier]) + '</span><span class="wb-opt-s wb-num">' + q.tier + ' tier</span></label>').join('') + '</div>';
@@ -114,7 +121,7 @@ function bodyHtml() {
     tg('enrichment', 'Web enrichment', 'Search the web for a current description before classifying') +
     tg('epo', 'Patent lookup', 'EPO patent data adjusts confidence by up to ±' + esc(d.epoAdjustMax) + (setup.epoKeysSet ? ' · EPO keys set' : ' · EPO keys missing; the run continues without patents')) +
     tg('validator', 'Validation', 'A second pass searches the web when confidence is below ' + esc(d.validatorThreshold) + ', then confirms, overrides or escalates') +
-    tg('batch', 'Batch mode', noBatch ? esc(batchOffText(prov)) : 'Classify all companies in one batch job: about half the classifier cost, but results can take an hour or more', noBatch) +
+    tg('batch', 'Batch mode', noBatch ? esc(batchOffText(prov)) : esc(batchSmallText() || 'Classify all companies in one batch job: about half the classifier cost, but results can take an hour or more'), noBatch) +
     '</fieldset>';
   h += '<fieldset class="wb-fs"><legend>Thresholds</legend><div class="wb-th-grid">' + THRESHOLDS.map((t) => {
     const off = t.needs && !d[t.needs];

@@ -14,7 +14,7 @@ from pipeline.llm_provider import get_cost_rates  # noqa: E402
 from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
-from webapp.settings_map import clean_settings, setup_info  # noqa: E402
+from webapp.settings_map import batch_min_companies, clean_settings, setup_info  # noqa: E402
 
 
 def _settings(**overrides) -> dict:
@@ -51,7 +51,7 @@ class EstimateTest(unittest.TestCase):
     def test_result_shape_and_tier_model(self):
         e = estimate(_settings(tier="balanced"), 10)
         self.assertEqual(
-            set(e), {"known", "model", "pricedAs", "pinned", "batch", "cost", "secs", "parts"}
+            set(e), {"known", "model", "pricedAs", "pinned", "batch", "batchMin", "cost", "secs", "parts"}
         )
         self.assertEqual(e["model"], models.CANDIDATES["anthropic"]["balanced"][0])
         self.assertAlmostEqual(e["cost"], sum(e["parts"].values()))
@@ -92,6 +92,15 @@ class EstimateTest(unittest.TestCase):
         self.assertFalse(estimate(_settings(batch=True), rows=99)["batch"])
         self.assertTrue(estimate(_settings(batch=True), rows=100)["batch"])
 
+    def test_batch_threshold_comes_from_the_run_config(self):
+        # config.json may lower batch.min_companies; the estimate must agree with the pipeline.
+        self.assertTrue(estimate(_settings(batch=True), rows=4, batch_min=3)["batch"])
+        self.assertFalse(estimate(_settings(batch=True), rows=2, batch_min=3)["batch"])
+
+    def test_estimate_reports_the_batch_threshold(self):
+        self.assertEqual(estimate(_settings(), 4)["batchMin"], DEFAULT_BATCH_MIN_COMPANIES)
+        self.assertEqual(estimate(_settings(), 4, batch_min=3)["batchMin"], 3)
+
     def test_small_run_is_costed_and_timed_as_direct(self):
         rows = DEFAULT_BATCH_MIN_COMPANIES - 1
         plain = estimate(_settings(batch=False), rows)
@@ -112,9 +121,15 @@ class EstimateTest(unittest.TestCase):
         self.assertAlmostEqual(alone["secs"], on["secs"])
 
     def test_more_workers_would_not_beat_epo(self):
-        with patch.object(est, "DEFAULT_WORKERS", 1000):
-            e = estimate(_settings(epo=True), 100)
+        e = estimate(_settings(epo=True), 100, workers=1000)
         self.assertGreaterEqual(e["secs"], 100 * est.EPO_SECS)
+
+    def test_fewer_workers_take_longer(self):
+        s = _settings(epo=False, batch=False)
+        eight = estimate(s, 100)
+        two = estimate(s, 100, workers=2)
+        self.assertAlmostEqual(eight["secs"], estimate(s, 100, workers=DEFAULT_WORKERS)["secs"])
+        self.assertAlmostEqual(two["secs"], eight["secs"] * DEFAULT_WORKERS / 2)
 
     def test_enrichment_off_zeroes_its_part(self):
         on = estimate(_settings(enrichment=True), 100)
@@ -347,3 +362,31 @@ class EstimateRequestTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatchMinCompaniesTest(unittest.TestCase):
+    def test_reads_batch_min_companies_from_config(self):
+        self.assertEqual(batch_min_companies({"batch": {"min_companies": 3}}), 3)
+
+    def test_default_when_missing_or_not_a_positive_whole_number(self):
+        for config in ({}, {"batch": {}}, {"batch": {"min_companies": 0}}, {"batch": {"min_companies": "x"}},
+                       {"batch": {"min_companies": True}}, {"batch": None}):
+            with self.subTest(config=config):
+                self.assertEqual(batch_min_companies(config), DEFAULT_BATCH_MIN_COMPANIES)
+
+    def test_setup_info_reports_the_threshold(self):
+        self.assertEqual(setup_info({})["batchMinCompanies"], DEFAULT_BATCH_MIN_COMPANIES)
+        self.assertEqual(setup_info({}, batch_min=5)["batchMinCompanies"], 5)
+
+    def test_setup_info_reports_the_workers(self):
+        self.assertEqual(setup_info({})["workers"], DEFAULT_WORKERS)
+        self.assertEqual(setup_info({}, workers=3)["workers"], 3)
+
+    def test_estimate_request_passes_the_workers_on(self):
+        body = {"settings": {"epo": False, "batch": False}, "rows": 100}
+        self.assertAlmostEqual(
+            est.estimate_request(body, workers=2)["secs"], est.estimate_request(body)["secs"] * DEFAULT_WORKERS / 2
+        )
+
+    def test_estimate_request_passes_the_threshold_on(self):
+        self.assertTrue(est.estimate_request({"settings": {"batch": True}, "rows": 4}, batch_min=3)["batch"])

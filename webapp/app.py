@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from data.writer import write_incremental, write_results
+from pipeline.parallel import workers_from
 from webapp import decisions, files, rows as row_view, settings_map
 from webapp.decisions import DecisionError
 from webapp.estimate import EstimateError, estimate_request
@@ -170,7 +171,8 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.get("/api/setup")
     def get_setup() -> Dict[str, Any]:
-        return settings_map.setup_info(os.environ)
+        config = _base_config()
+        return settings_map.setup_info(os.environ, settings_map.batch_min_companies(config), workers_from(config))
 
     @app.post("/api/files")
     async def post_file(request: Request) -> Dict[str, Any]:
@@ -191,7 +193,8 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.post("/api/estimate")
     def post_estimate(body: Any = Body(None)) -> Dict[str, Any]:
-        return estimate_request(body)
+        config = _base_config()
+        return estimate_request(body, settings_map.batch_min_companies(config), workers_from(config))
 
     # --- runs ---
 
@@ -247,6 +250,17 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         runner.poll()
         summary, rows, consumed, _ = _snapshot(run_id)
         return {"run": summary, "rows": rows, "cursor": consumed}
+
+    @app.post("/api/runs/{run_id}/file")
+    def post_run_file(run_id: str) -> Dict[str, Any]:
+        """The run's input copy (its ticked rows only) as a new upload, for "Same settings…"."""
+        meta = _meta(run_id)
+        try:
+            data = (store.run_dir(run_id) / "input" / meta["file"]).read_bytes()
+        except (KeyError, OSError):
+            raise HTTPException(status_code=404,
+                                detail="This run's file is no longer available. Please choose the file again.") from None
+        return files.save_upload(uploads_dir, meta["file"], data)
 
     @app.get("/api/runs/{run_id}/changes")
     def get_changes(run_id: str, cursor: int = 0) -> Dict[str, Any]:
