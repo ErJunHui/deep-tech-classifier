@@ -4,7 +4,7 @@
    sheetBodyHtml. It is a modal dialog: S.analyst is true while it is open,
    global shortcuts are off, Tab stays inside it (trapTab) and closing it
    returns focus to the control that opened it. */
-import { esc, money, fmtDur, startProblem, missingKeyText, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
+import { esc, money, fmtDur, startProblem, missingKeyText, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS, directRunText } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
 import { QUALITY, draftProvider, batchOffText, batchSmallText, closePop, openSettings } from './setup.js';
@@ -92,7 +92,7 @@ function estHtml() {
     '<div><div class="wb-est-l">Duration</div><div class="wb-est-v">' + (e ? fmtDur(e.secs) : none) + '</div></div>' +
     '<div class="wb-est-split">' + split + '</div>' +
     (prob ? '<div class="wb-est-why">' + esc(prob.label) + '</div>' : '') +
-    '<div class="wb-est-note">' + esc(model) + ' · ' + (batch ? 'batch mode halves classifier cost; a real batch job can take up to an hour' : 'one company at a time') + ' · web searches are usually the largest part of the bill</div>' +
+    '<div class="wb-est-note">' + esc(model) + ' · ' + (batch ? 'batch mode halves classifier cost; a real batch job can take up to an hour' : directRunText(S.setup.workers)) + ' · web searches are usually the largest part of the bill</div>' +
     (e ? '<div class="wb-est-note">' + esc(estimateNote(e)) + '</div>' : '') + '</div>';
 }
 

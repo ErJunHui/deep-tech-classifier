@@ -176,6 +176,14 @@ class ApiTest(unittest.TestCase):
         r = self.client.post("/api/estimate", json={"settings": {"batch": True}, "rows": 4})
         self.assertEqual(r.json()["batchMin"], threshold)
 
+    def test_setup_reports_the_configured_workers(self):
+        project = Path(tempfile.mkdtemp(dir=self.tmp))
+        (project / "config.json").write_text(json.dumps({"concurrency": {"workers": 3}}), encoding="utf-8")
+        (project / "web").mkdir()  # the app serves it
+        client = TestClient(create_app(project, Path(tempfile.mkdtemp(dir=self.tmp)), runner_command=FAKE))
+        with client:
+            self.assertEqual(client.get("/api/setup").json()["workers"], 3)
+
     # --- runs ---
 
     def test_upload_then_start_then_poll_to_complete(self):

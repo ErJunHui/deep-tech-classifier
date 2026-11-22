@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from data.writer import write_incremental, write_results
+from pipeline.parallel import workers_from
 from webapp import decisions, files, rows as row_view, settings_map
 from webapp.decisions import DecisionError
 from webapp.estimate import EstimateError, estimate_request
@@ -170,7 +171,8 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.get("/api/setup")
     def get_setup() -> Dict[str, Any]:
-        return settings_map.setup_info(os.environ, settings_map.batch_min_companies(_base_config()))
+        config = _base_config()
+        return settings_map.setup_info(os.environ, settings_map.batch_min_companies(config), workers_from(config))
 
     @app.post("/api/files")
     async def post_file(request: Request) -> Dict[str, Any]:

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
 
 from pipeline import models
-from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES
+from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -207,7 +207,9 @@ def batch_min_companies(config: Mapping[str, Any]) -> int:
     return value
 
 
-def setup_info(env: Mapping[str, str], batch_min: int = DEFAULT_BATCH_MIN_COMPANIES) -> Dict[str, Any]:
+def setup_info(
+    env: Mapping[str, str], batch_min: int = DEFAULT_BATCH_MIN_COMPANIES, workers: int = DEFAULT_WORKERS
+) -> Dict[str, Any]:
     """
     What the browser needs to show the settings form.
 
@@ -215,7 +217,9 @@ def setup_info(env: Mapping[str, str], batch_min: int = DEFAULT_BATCH_MIN_COMPAN
     tiers maps each tier to its model and costPerCompany each tier to the
     price of one company at the default settings (None when not priced).
     batchMinCompanies is batch_min: below it a run classifies directly even
-    with batch mode on.
+    with batch mode on. workers is how many companies a run processes at
+    once (pipeline.parallel.workers_from of the base config), so the page
+    can say so for a run that classifies directly.
     """
     providers = [
         {
@@ -233,6 +237,7 @@ def setup_info(env: Mapping[str, str], batch_min: int = DEFAULT_BATCH_MIN_COMPAN
         "providers": providers,
         "epoKeysSet": bool(env.get("EPO_KEY")) and bool(env.get("EPO_SECRET")),
         "batchMinCompanies": batch_min,
+        "workers": workers,
         "defaults": copy.deepcopy(DEFAULT_SETTINGS),
         "pricedModels": sorted(models.COST_RATES),
     }

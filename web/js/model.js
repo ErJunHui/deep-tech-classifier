@@ -445,6 +445,13 @@ export function tierPriceText(cost) {
 }
 /* Why batch mode is off for provider prov: the providers that have it, or
    none. providers: GET /api/setup providers[] ({label, batch}). */
+/* How a run that classifies directly goes through the companies, from
+   setup's workers (concurrency.workers; 8 when unknown): "up to 8 companies
+   at a time", or "one company at a time" when it is 1. */
+export function directRunText(workers) {
+  const n = workers || 8;
+  return n === 1 ? 'one company at a time' : 'up to ' + n + ' companies at a time';
+}
 /* Under the Batch mode toggle when the run is too small for a batch job:
    rows ticked companies, batchMin the server's threshold (GET /api/setup
    batchMinCompanies, as pipeline/orchestrator.py applies it). Null when
@@ -456,7 +463,7 @@ export function batchSmallRunText(rows, batchMin) {
 export function noBatchText(providers, prov) {
   const labels = providers.filter((p) => p.batch).map((p) => p.label);
   if (!labels.length) return 'Batch jobs are not available.';
-  return 'Only ' + labels.join(' and ') + (labels.length === 1 ? ' supports' : ' support') + ' batch jobs; ' + prov.label + ' works one company at a time.';
+  return 'Only ' + labels.join(' and ') + (labels.length === 1 ? ' supports' : ' support') + ' batch jobs; ' + prov.label + ' classifies each company directly.';
 }
 /* The setup head's file line (text): '1 row · 0 skipped (empty name) · 1 column'. */
 export const fileLine = (file, mapping) => countOf(file.rows, 'row', 'rows') + ' · ' + skippedCount(file, mapping).toLocaleString('en-US') + ' skipped (empty name) · ' + countOf(file.headers.length, 'column', 'columns');

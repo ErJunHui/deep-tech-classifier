@@ -14,6 +14,7 @@ from pipeline.llm_provider import get_cost_rates  # noqa: E402
 from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
+from pipeline.parallel import DEFAULT_WORKERS  # noqa: E402
 from webapp.settings_map import batch_min_companies, clean_settings, setup_info  # noqa: E402
 
 
@@ -371,6 +372,10 @@ class BatchMinCompaniesTest(unittest.TestCase):
     def test_setup_info_reports_the_threshold(self):
         self.assertEqual(setup_info({})["batchMinCompanies"], DEFAULT_BATCH_MIN_COMPANIES)
         self.assertEqual(setup_info({}, batch_min=5)["batchMinCompanies"], 5)
+
+    def test_setup_info_reports_the_workers(self):
+        self.assertEqual(setup_info({})["workers"], DEFAULT_WORKERS)
+        self.assertEqual(setup_info({}, workers=3)["workers"], 3)
 
     def test_estimate_request_passes_the_threshold_on(self):
         self.assertTrue(est.estimate_request({"settings": {"batch": True}, "rows": 4}, batch_min=3)["batch"])

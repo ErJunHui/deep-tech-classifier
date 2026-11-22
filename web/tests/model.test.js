@@ -12,7 +12,7 @@ import {
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
   keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote, batchSmallRunText,
-  extraColumnsShort, paletteHeading,
+  extraColumnsShort, paletteHeading, directRunText,
   NARROW_BELOW, NARROW_QUERY, isNarrow, escapeTarget, panelAfterSelect, readingKeyAction,
 } from '../js/model.js';
 
@@ -884,10 +884,15 @@ test('noBatchText: the batch providers, or none available', () => {
   const ant = { id: 'anthropic', label: 'Anthropic', batch: true };
   const oai = { id: 'openai', label: 'OpenAI', batch: false };
   const gem = { id: 'gemini', label: 'Google Gemini', batch: false };
-  assert.equal(noBatchText([ant, oai], oai), 'Only Anthropic supports batch jobs; OpenAI works one company at a time.');
+  assert.equal(noBatchText([ant, oai], oai), 'Only Anthropic supports batch jobs; OpenAI classifies each company directly.');
   assert.equal(noBatchText([oai, gem], oai), 'Batch jobs are not available.');
   assert.equal(noBatchText([], oai), 'Batch jobs are not available.');
-  assert.equal(noBatchText([ant, Object.assign({}, gem, { batch: true }), oai], oai), 'Only Anthropic and Google Gemini support batch jobs; OpenAI works one company at a time.');
+  assert.equal(noBatchText([ant, Object.assign({}, gem, { batch: true }), oai], oai), 'Only Anthropic and Google Gemini support batch jobs; OpenAI classifies each company directly.');
+});
+test('directRunText: the configured worker count, singular at one, default 8 when unknown', () => {
+  assert.equal(directRunText(8), 'up to 8 companies at a time');
+  assert.equal(directRunText(1), 'one company at a time');
+  assert.equal(directRunText(undefined), 'up to 8 companies at a time');
 });
 test('startProblem: a file being read blocks the start, named on the button', () => {
   const draft = named([]);

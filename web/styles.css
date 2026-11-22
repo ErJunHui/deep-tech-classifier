@@ -550,9 +550,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-thf.is-off { opacity: 0.5; }
 .v-workbench .wb-fs-foot { display: flex; justify-content: flex-end; margin-top: 8px; }
 
-/* Command menu + cheat sheet (above centre, clear of the picker pill) */
-.v-workbench .wb-mscrim { position: absolute; inset: 0; z-index: 40; background: rgba(20, 20, 18, 0.22); animation: workbench-fade 160ms var(--ease-out) both; }
-.v-workbench .wb-modal { position: absolute; z-index: 41; left: 50%; top: 11%; width: min(580px, calc(100% - 32px)); max-height: 72%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-l); box-shadow: var(--shadow-2); transform: translateX(-50%); transform-origin: 50% 0; animation: workbench-pop 180ms var(--ease-out) both; overflow: hidden; }
+/* Command menu + cheat sheet (above centre, clear of the picker pill). Both
+   are opened from the keyboard (Ctrl K, ?), so they appear and go at once. */
+.v-workbench .wb-mscrim { position: absolute; inset: 0; z-index: 40; background: rgba(20, 20, 18, 0.22); }
+.v-workbench .wb-modal { position: absolute; z-index: 41; left: 50%; top: 11%; width: min(580px, calc(100% - 32px)); max-height: 72%; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-l); box-shadow: var(--shadow-2); transform: translateX(-50%); overflow: hidden; }
 .v-workbench .wb-modal.is-help { width: min(700px, calc(100% - 32px)); }
 .v-workbench .wb-pal-in { flex: none; height: 46px; border: 0; border-bottom: 1px solid var(--border); padding: 0 16px; font-size: 15px; background: transparent; outline: none; }
 .v-workbench .wb-pal-list { list-style: none; padding: 6px; overflow-y: auto; flex: 1; }
@@ -592,11 +593,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 @keyframes workbench-slide-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(16px); } }
 @keyframes workbench-pop-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes workbench-rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-@keyframes workbench-pop { from { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(0.98); } to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); } }
 @keyframes workbench-toast { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+/* Reduced motion: fades stay, movement goes. Transitions keep only opacity,
+   the keyframes that move or scale become plain fades (same names and
+   durations, so the leave timers in analyst.js and toast.js still match),
+   presses do not shrink, and the looping pulses stop. */
 @media (prefers-reduced-motion: reduce) {
-  .v-workbench *, .v-workbench *::before, .v-workbench *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition: none !important; }
+  .v-workbench *, .v-workbench *::before, .v-workbench *::after { transition-property: opacity !important; }
+  .v-workbench .wb-btn:active, .v-workbench .wb-seg label:active, .v-workbench .wb-opt:active, .v-workbench .wb-mapchip:active, .v-workbench .wb-toast-btn:active { transform: none; }
+  .v-workbench.is-setup .wb-dropover { transform: none; }
   .v-workbench .wb-step::before, .v-workbench .wb-dot.is-running { animation: none !important; }
+  @keyframes workbench-slide { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes workbench-slide-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes workbench-pop-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes workbench-rise { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes workbench-toast { from { opacity: 0; } to { opacity: 1; } }
 }
 
 /* Additions to the prototype CSS (everything above is the prototype's, unchanged):
@@ -670,4 +681,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .v-workbench .wb-help-b { grid-template-columns: minmax(0, 1fr); }
   .v-workbench .wb-toasts { left: 12px; right: 12px; bottom: 16px; }
   .v-workbench .wb-toast { max-width: min(400px, 100%); }
+}
+
+/* Reduced motion in a narrow window: the drawer and the panel fade in place
+   instead of sliding (pointer-triggered only, as above). */
+@media (prefers-reduced-motion: reduce) and (width < 900px) {
+  .v-workbench .wb-rail, .v-workbench .wb-side { transform: none; opacity: 0; }
+  .v-workbench.is-drawer .wb-rail, .v-workbench.is-panel .wb-side { opacity: 1; }
+  .v-workbench.is-motion .wb-rail, .v-workbench.is-motion .wb-side { transition: opacity 180ms var(--ease-out), visibility 0s linear 180ms !important; }
+  .v-workbench.is-motion.is-drawer .wb-rail, .v-workbench.is-motion.is-panel .wb-side { transition: opacity 180ms var(--ease-out), visibility 0s !important; }
+  .v-workbench.is-motion .wb-railscrim { transition-property: opacity, visibility !important; }
 }

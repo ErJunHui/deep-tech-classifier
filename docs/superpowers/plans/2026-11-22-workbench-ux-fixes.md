@@ -37,9 +37,9 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 | 14 | The Reasoning text in the evidence panel is larger than every other section | `styles.css` detail | **Batch 4**, Task 11 |
 | 15 | The empty New run screen shows placeholder rows that read as "loading", and one overlaps the upload icon | `render/setup.js` | **Batch 4**, Task 12 |
 
-Design suggestions from the same review, not yet scheduled:
-- Open and close the command menu and shortcuts sheet instantly, because they are opened from the keyboard.
-- Under `prefers-reduced-motion`, keep opacity transitions and remove only movement.
+Design suggestions from the same review:
+- ~~Open and close the command menu and shortcuts sheet instantly, because they are opened from the keyboard.~~ Done in Batch 6, Task 15.
+- ~~Under `prefers-reduced-motion`, keep opacity transitions and remove only movement.~~ Done in Batch 6, Task 16.
 - Use transitions rather than one-shot keyframes for the Analyst sheet, so it can be interrupted.
 - Make "Same settings…" offer the same file first.
 
@@ -117,7 +117,7 @@ The server loads `.env` once, in `serve.py`, and `/api/setup` reads `os.environ`
 - [x] Tests: Python (threshold read from config, passed through `estimate_request`, reported by setup and estimate, and the same value in both API answers) and Node (`batchSmallRunText`).
 - [x] Browser check, after restarting the server: with `companies.xlsx` (4 rows), both toggles show the explanation, and `/api/setup` reports `batchMinCompanies: 100`.
 
-Not changed: the estimate note says "one company at a time" when not batching, but per-company steps run on `DEFAULT_WORKERS` workers. This is worth rewording in the copy batch.
+Not changed here: the estimate note said "one company at a time" when not batching, but per-company steps run on several workers. Fixed in Batch 6, Task 17.
 
 ## Task 8 (#10): Nothing clips at 1024px
 
@@ -168,9 +168,45 @@ Rule: below 900px (`@media (width < 900px)`, `model.NARROW_QUERY`) the workbench
 - [x] **Step 3:** Implement the rules in `model.js`. Add `render/layout.js` (`syncLayout`: classes, `inert` and the Runs button's `aria-expanded`), the drawer and panel commands and `watchLayout` (matchMedia) in `commands.js`, and the wiring in `events.js`. Add the Runs button to both heads, the panel bar and scrim to `index.html`, and the narrow block to `styles.css`.
 - [x] **Step 4:** Run the tests (152 pass). Browser check at 390x844, 768x1024 and 899x800: the drawer opens, closes on Esc, on the scrim and on a pick; a row opens the panel; J and K update it; Esc and Back return to the row; setup with `companies.xlsx`, the settings popover, the column menu, Analyst settings, the command menu and the shortcuts sheet fit, with no horizontal scroll. At 1024x768 and 1440x860 the columns and reading view are as before, also after resizing from 390 with the panel open. No console errors. Screenshots are in `.playwright-mcp/s9-*.png`.
 
+## Task 15: The command menu and shortcuts sheet open at once
+
+**Files:** `web/styles.css`
+
+Both are opened from the keyboard (Ctrl K, ?), so under the Global Constraint they don't animate. They already closed at once.
+
+- [x] `.wb-mscrim` and `.wb-modal` lose their animations, and the unused `workbench-pop` keyframes are gone.
+- [x] Browser check: after Ctrl K or ?, the modal layer has no running animations, and the shortcuts sheet is still centred.
+
+## Task 16: Reduced motion keeps fades
+
+**Files:** `web/styles.css`
+
+Rule: under `prefers-reduced-motion: reduce`, fades stay and movement goes. Before, every animation was cut to 1ms and every transition removed.
+- Transitions keep only `opacity`. Hover colours were already instant, so only movement is lost.
+- The keyframes that move or scale (`workbench-slide`, `-slide-out`, `-pop-in`, `-rise`, `-toast`) are redefined as plain fades inside the media query. They keep their names and durations, so the leave timers in `analyst.js` and `toast.js` still match.
+- Buttons don't shrink when pressed, the drop target doesn't scale, and the looping pulses stay off.
+- Below 900px the drawer and the evidence panel fade in place instead of sliding (pointer-triggered only, as before).
+
+- [x] Browser check with reduced motion emulated: the setup bar, settings popover, Analyst sheet and its scrim each run one opacity-only animation at full length. Buttons and switches transition only opacity. At 390 the Runs drawer fades (opacity and visibility, no transform). With no preference, the drawer slides as before.
+
+## Task 17: The direct-run note gives the real worker count
+
+**Files:** `webapp/settings_map.py`, `webapp/app.py`, `web/js/model.js`, `web/js/render/setup.js`, `web/js/render/analyst.js`, `tests/test_webapp/test_estimate.py`, `tests/test_webapp/test_api.py`, `web/tests/model.test.js`
+
+A run that doesn't batch processes `concurrency.workers` companies at once (8 by default, 1 to 32), not one.
+
+- [x] `setup_info` takes `workers`, and `/api/setup` reports `workers_from(base config)` as `workers`.
+- [x] `model.directRunText(workers)`: "up to 8 companies at a time", or "one company at a time" when workers is 1 (8 when unknown). The setup bar says "Classified directly, up to 8 companies at a time; results appear as each one finishes." The Analyst estimate note uses the same text.
+- [x] `noBatchText` says "<provider> classifies each company directly" instead of "works one company at a time".
+- [x] Tests: Python (`setup_info` reports workers; `/api/setup` reports a project's `concurrency.workers`) and Node (`directRunText`, `noBatchText`). 173 Python and 153 Node tests pass.
+- [x] Browser check, on a fresh server: `/api/setup` reports `workers: 8`, and the Analyst note reads "claude-haiku-5-5 · up to 8 companies at a time · web searches are usually the largest part of the bill".
+
+Not changed: the time estimate still assumes 8 workers whatever `concurrency.workers` says (README, `concurrency`).
+
 ## Next batches (proposed order)
 
 1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
 2. ~~Estimate correctness: #3.~~ Done in Batch 3.
 3. ~~Layout: #10, #12, #11, #14, #15 and #13.~~ Done in Batch 4.
 4. ~~Small screens: #9.~~ Done in Batch 5.
+5. ~~Motion and copy: keyboard modals, reduced motion, worker count.~~ Done in Batch 6.

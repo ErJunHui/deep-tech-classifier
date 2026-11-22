@@ -11,7 +11,7 @@
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, extraColumnsShort, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
+  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, directRunText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd, railBtn } from './util.js';
@@ -206,7 +206,7 @@ export function renderSetupBar() {
   else if (dr.startError) note = '<p class="wb-setbar-note is-why" id="wb-setbar-why" role="alert">' + esc(dr.startError) + '</p>';
   else {
     const est = dr.estFailed ? ' ' + ESTIMATE_FAILED : e ? (e.known ? '' : ' ' + esc(unknownCostLine(e))) + ' ' + esc(estimateNote(e)) : '';
-    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'One company at a time; results appear as each one finishes.') + est + '</p>';
+    note = '<p class="wb-setbar-note">' + (batch ? 'Batch mode: about half the classifier cost, but a real batch job can take up to an hour.' : 'Classified directly, ' + directRunText(S.setup.workers) + '; results appear as each one finishes.') + est + '</p>';
   }
   const why = prob || dr.startError;
   put(R('setbar'), '<div class="wb-setbar-top"><button class="wb-btn wb-btn-sm wb-set" data-act="settings-pop" data-fk="settings" aria-haspopup="dialog" aria-expanded="' + open + '">Settings: <b>' + esc(qualityName(d.tier)) + (isCustom(d, S.setup.defaults) ? ', customised' : '') + '</b> <span aria-hidden="true">▾</span></button>' +
