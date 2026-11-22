@@ -454,6 +454,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-sempty h2 { font-size: 16px; font-weight: 650; margin-bottom: 4px; }
 .v-workbench .wb-sempty p { color: var(--text-2); margin-bottom: 14px; }
 .v-workbench .wb-sempty-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+/* A long file name in "Use <file> again" is cut; the button's title has it in full. */
+.v-workbench .wb-reuse-n { display: inline-block; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .v-workbench .wb-sempty small { display: block; margin-top: 12px; color: var(--text-3); font-size: 12px; }
 .v-workbench .wb-setpad { height: 176px; }
 .v-workbench .wb-dropover { position: absolute; inset: 8px; z-index: 15; display: none; place-items: center; border: 2px dashed var(--accent); border-radius: var(--radius-l); background: rgba(232, 238, 252, 0.9); color: var(--accent); font-size: 15px; font-weight: 600; pointer-events: none; }

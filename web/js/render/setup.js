@@ -11,7 +11,7 @@
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, extraColumnsShort, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, directRunText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
+  modelFor, isCustom, reuseOffer, visibleRows, fileLine, noBatchText, tierPriceText, directRunText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd, railBtn } from './util.js';
@@ -73,10 +73,11 @@ export function setSetupChrome(on) {
   R('setbar').innerHTML = '';
 }
 
-/* Focus where setup starts: Start when a file is loaded, else Choose file. */
+/* Focus where setup starts: Start when a file is loaded, else "Use <file>
+   again" when it is offered, else Choose file. */
 export function focusSetupStart() {
   if (!setupShown()) return;
-  const b = root().querySelector(S.draft.file ? '[data-fk="start"]' : '[data-fk="pick-file"]');
+  const b = root().querySelector(S.draft.file ? '[data-fk="start"]' : '[data-fk="reuse-file"], [data-fk="pick-file"]');
   if (b) b.focus();
 }
 
@@ -130,11 +131,17 @@ function thHtml(fl) {
 
 function emptyHtml() {
   const dr = S.draft;
+  const offer = reuseOffer(dr);
+  // A "Same settings…" draft offers its run's file first; Choose file steps back.
+  const acts = offer
+    ? '<button class="wb-btn wb-btn-primary" data-act="reuse-file" data-fk="reuse-file" title="' + esc(offer.name) + ' from ' + esc(offer.runId) + '"><span>Use <span class="wb-reuse-n">' + esc(offer.name) + '</span> again</span></button>' +
+      '<button class="wb-btn" data-act="pick-file" data-fk="pick-file">Choose another file…</button>'
+    : '<button class="wb-btn wb-btn-primary" data-act="pick-file" data-fk="pick-file">Choose file…</button>';
   return '<div class="wb-sempty"><div class="wb-sempty-in">' +
     '<div class="wb-sempty-ic" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg></div>' +
-    '<h2>' + (dr.reading ? 'Reading ' + esc(dr.reading) + '…' : 'Drop a spreadsheet here to start') + '</h2>' +
+    '<h2>' + (dr.reading ? 'Reading ' + esc(dr.reading) + '…' : offer ? 'Use the same file, or drop a new one' : 'Drop a spreadsheet here to start') + '</h2>' +
     '<p>One row per company. Column headers are matched case-insensitively, and your companies appear in this table before anything runs.</p>' +
-    '<div class="wb-sempty-acts"><button class="wb-btn wb-btn-primary" data-act="pick-file" data-fk="pick-file">Choose file…</button></div>' +
+    '<div class="wb-sempty-acts">' + acts + '</div>' +
     (dr.error ? '<p class="wb-snote is-err" role="alert">' + esc(dr.error) + '</p>' : '') +
     '<small>Excel (.xlsx, .xls) or CSV. Nothing is sent to an AI provider until you start the run.</small></div></div>';
 }

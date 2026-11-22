@@ -297,6 +297,31 @@ class ApiTest(unittest.TestCase):
         data = self._wait_ended(run["id"])
         self.assertEqual([row["name"] for row in data["rows"]], ["Company 0", "Company 2", "Company 4"])
 
+    def test_run_file_is_offered_again_as_a_new_upload(self):
+        # "Same settings…": the run's own input (its ticked rows only) becomes a new upload.
+        run = self._start(5, exclude=[1, 3])
+        self._wait_ended(run["id"])
+        r = self.client.post(f"/api/runs/{run['id']}/file")
+        self.assertEqual(r.status_code, 200, r.text)
+        info = r.json()
+        self.assertEqual(info["name"], "companies.xlsx")
+        self.assertEqual(info["rows"], 3)
+        self.assertEqual([row[0] for row in info["table"]], ["Company 0", "Company 2", "Company 4"])
+        self.assertEqual(info["mapping"]["company_name"], "Company")
+        again = self.client.post("/api/runs", json={"fileId": info["fileId"], "settings": SETTINGS})
+        self.assertEqual(again.status_code, 201, again.text)
+        self.assertEqual(again.json()["total"], 3)
+
+    def test_run_file_is_404_for_an_unknown_run_or_a_missing_input(self):
+        self.assertEqual(self.client.post("/api/runs/run_19990101_000000/file").status_code, 404)
+        run = self._start(2)
+        self._wait_ended(run["id"])
+        folder = Path(self.client.app.state.store.run_dir(run["id"]))
+        (folder / "input" / "companies.xlsx").unlink()
+        r = self.client.post(f"/api/runs/{run['id']}/file")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["detail"], "This run's file is no longer available. Please choose the file again.")
+
     def test_stop_and_resume_roundtrip(self):
         os.environ["FAKE_DELAY_S"] = "0.5"
         run = self._start(5)

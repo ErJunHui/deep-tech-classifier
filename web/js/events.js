@@ -7,7 +7,7 @@
    analyst sheet, Start). The command menu, shortcuts sheet, reading view,
    divider, filter shortcuts and download are in commands.js. */
 import { S, renderDetail, stopActive, resumeActive } from './state.js';
-import { openSetup, cancelSetup, parkSetup, showRun, setupChanged, loadFile, clearFile, startRun } from './setup.js';
+import { openSetup, cancelSetup, parkSetup, showRun, setupChanged, loadFile, reuseFile, clearFile, startRun } from './setup.js';
 import { setupShown } from './store.js';
 import { record, restore, undo } from './decisions.js';
 import {
@@ -278,6 +278,7 @@ function onClick(e) {
     case 'rerun': if (S.active) openSetup(S.active.run); break;
     case 'cancel-setup': cancelSetup(); break;
     case 'pick-file': R('file').value = ''; R('file').click(); break;
+    case 'reuse-file': reuseFile(); break;
     case 'clear-file': clearFile(); break;
     case 'col-menu': {
       const f = a.getAttribute('data-field');

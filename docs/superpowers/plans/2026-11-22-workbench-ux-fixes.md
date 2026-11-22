@@ -40,8 +40,8 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 Design suggestions from the same review:
 - ~~Open and close the command menu and shortcuts sheet instantly, because they are opened from the keyboard.~~ Done in Batch 6, Task 15.
 - ~~Under `prefers-reduced-motion`, keep opacity transitions and remove only movement.~~ Done in Batch 6, Task 16.
-- Use transitions rather than one-shot keyframes for the Analyst sheet, so it can be interrupted. Batch 7, Task 18.
-- Make "Same settings…" offer the same file first. Batch 7, Task 19.
+- Use transitions rather than one-shot keyframes for the Analyst sheet, so it can be interrupted. Done in Batch 7, Task 18.
+- Make "Same settings…" offer the same file first. Done in Batch 7, Task 19.
 
 ---
 
@@ -221,12 +221,12 @@ Rule: the sheet and scrim use transitions toward an `is-open` class. Opening add
 
 A "Same settings…" draft starts with no file, although the user usually wants to run the same companies again. Every run keeps a copy of its input in `runs/<id>/input/<file>`, which holds only the rows that were ticked.
 
-Rule: while a "Same settings…" draft has no file, the drop target's primary button is **Use <file> again**, and **Choose file…** becomes a secondary button next to it. Setup focuses the primary button. Clicking it copies the run's input into a new upload, and from then on it behaves exactly like an upload, with the mapping kept by `mappingForFile`. If the input is gone, the error appears under the buttons and Choose file still works. After **Change file** the offer comes back.
+Rule: while a "Same settings…" draft has no file, the drop target reads "Use the same file, or drop a new one", its primary button is **Use <file> again**, and **Choose another file…** is a secondary button next to it. A long name is cut with an ellipsis and shown in full in the tooltip. Setup focuses the primary button. Clicking it copies the run's input into a new upload, and from then on it behaves exactly like an upload, with the mapping kept by `mappingForFile`. If the input is gone, the error appears under the buttons and Choose file still works. After **Change file** the offer comes back.
 
-- [ ] **Step 1:** Tests. Python: `POST /api/runs/{id}/file` returns an upload (`fileId`, `name`, `rows`) of the run's input, with the run's rows only. It answers 404 for an unknown run and for a run whose input is missing, and the new `fileId` can start a run. Node: `reuseOffer(draft)` returns `{ name, runId }` for a "Same settings…" draft with no file that is not reading, and `null` otherwise.
-- [ ] **Step 2:** Run them and confirm they fail.
-- [ ] **Step 3:** Add the route (it reads the bytes and calls `files.save_upload`), `api.reuseRunFile`, `fromFile` on `newDraft`, `reuseOffer`, `reuseFile()` in `setup.js` (sharing `loadFile`'s upload handling), the `reuse-file` action, and the buttons and focus in `render/setup.js`.
-- [ ] **Step 4:** Run the tests. In the browser, on the saved run: Same settings… shows "Use companies.xlsx again" focused. Clicking it loads the rows with the run's mapping. Change file brings the offer back. Choose file still works.
+- [x] **Step 1:** Tests. Python: `POST /api/runs/{id}/file` returns an upload (`fileId`, `name`, `rows`) of the run's input, with the run's rows only. It answers 404 for an unknown run and for a run whose input is missing, and the new `fileId` can start a run. Node: `reuseOffer(draft)` returns `{ name, runId }` for a "Same settings…" draft with no file that is not reading, and `null` otherwise.
+- [x] **Step 2:** Run them and confirm they fail.
+- [x] **Step 3:** Add the route (it reads the bytes and calls `files.save_upload`), `api.reuseRunFile`, `fromFile` on `newDraft`, `reuseOffer`, `reuseFile()` in `setup.js` (sharing `loadFile`'s upload handling), the `reuse-file` action, and the buttons and focus in `render/setup.js`.
+- [x] **Step 4:** Run the tests. In the browser, on the saved run: Same settings… shows "Use companies.xlsx again" focused. Clicking it loads the rows with the run's mapping. Change file brings the offer back. Choose file still works.
 
 ## Next batches (proposed order)
 
@@ -235,4 +235,4 @@ Rule: while a "Same settings…" draft has no file, the drop target's primary bu
 3. ~~Layout: #10, #12, #11, #14, #15 and #13.~~ Done in Batch 4.
 4. ~~Small screens: #9.~~ Done in Batch 5.
 5. ~~Motion and copy: keyboard modals, reduced motion, worker count.~~ Done in Batch 6.
-6. Batch 7: the Analyst sheet can be interrupted (Task 18), and Same settings offers the same file (Task 19).
+6. ~~Batch 7: the Analyst sheet can be interrupted (Task 18), and Same settings offers the same file (Task 19).~~ Done.

@@ -47,6 +47,7 @@ export const listRuns = () => call('GET', '/api/runs');
 export const createRun = (fileId, settings, exclude) => call('POST', '/api/runs', { fileId, settings, exclude });
 export const getRun = (id) => call('GET', run(id));
 export const getChanges = (id, cursor) => call('GET', run(id) + '/changes?cursor=' + encodeURIComponent(cursor));
+export const reuseRunFile = (id) => call('POST', run(id) + '/file');
 export const stopRun = (id) => call('POST', run(id) + '/stop');
 export const resumeRun = (id) => call('POST', run(id) + '/resume');
 export const putDecision = (id, index, choice, note) => call('PUT', row(id, index) + '/decision', { choice, note });

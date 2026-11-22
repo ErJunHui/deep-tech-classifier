@@ -251,6 +251,17 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
         summary, rows, consumed, _ = _snapshot(run_id)
         return {"run": summary, "rows": rows, "cursor": consumed}
 
+    @app.post("/api/runs/{run_id}/file")
+    def post_run_file(run_id: str) -> Dict[str, Any]:
+        """The run's input copy (its ticked rows only) as a new upload, for "Same settings…"."""
+        meta = _meta(run_id)
+        try:
+            data = (store.run_dir(run_id) / "input" / meta["file"]).read_bytes()
+        except (KeyError, OSError):
+            raise HTTPException(status_code=404,
+                                detail="This run's file is no longer available. Please choose the file again.") from None
+        return files.save_upload(uploads_dir, meta["file"], data)
+
     @app.get("/api/runs/{run_id}/changes")
     def get_changes(run_id: str, cursor: int = 0) -> Dict[str, Any]:
         runner.poll()

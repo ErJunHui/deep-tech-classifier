@@ -363,7 +363,8 @@ export const SETUP_FIELDS = Object.freeze([
 /* A new draft run (S.draft). setup is GET /api/setup; fromRun, for "Same
    settings…", a RunSummary whose settings are copied over the defaults. The
    cfg never shares objects with either. Besides cfg, file and excluded
-   (see startProblem): fromId names the run it came from; limit is the setup
+   (see startProblem): fromId names the run it came from and fromFile its file
+   name (reuseOffer); limit is the setup
    table's row window (visibleRows); reading is the name of the file being
    uploaded and error the last upload's rejection; est is the last
    POST /api/estimate answer, estFailed true when the latest request for one
@@ -374,9 +375,18 @@ export function newDraft(setup, fromRun) {
   const cfg = Object.assign(copy(setup.defaults), fromRun ? copy(fromRun.settings) : {});
   cfg.mapping = Object.assign({}, cfg.mapping);
   return {
-    cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null, limit: ROW_WINDOW,
+    cfg, file: null, excluded: new Set(), fromId: fromRun ? fromRun.id : null,
+    fromFile: (fromRun && fromRun.file) || null, limit: ROW_WINDOW,
     reading: '', error: '', est: null, estFailed: false, startError: '',
   };
+}
+
+/* What a "Same settings…" draft offers to load before any file: its run's
+   own file ({ name, runId }, POST /api/runs/{runId}/file), while no file is
+   loaded or being read. null for a fresh draft. */
+export function reuseOffer(draft) {
+  if (!draft || !draft.fromId || !draft.fromFile || draft.file || draft.reading) return null;
+  return { name: draft.fromFile, runId: draft.fromId };
 }
 
 /* The mapping to use with a newly loaded file (the inspect dict). A fresh

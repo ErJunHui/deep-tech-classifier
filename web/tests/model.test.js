@@ -6,7 +6,7 @@ import {
   formProblem, needsNote, startProblem, skippedCount, ROW_WINDOW, visibleRows, viewKey, mergeChanges,
   pushUndo, popUndo, decisionVerdict, editChoice, changeChoice, recordToast, restoreToast, undoToast,
   decisionErrorPlace, undoFailureKeeps, busyNotice,
-  tickedCount, newDraft, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
+  tickedCount, newDraft, reuseOffer, mappingForFile, mapState, tickAllState, excludeList, estimateRows,
   classifyLabel, estimateNote, unknownCostLine, extraColumns, noDescriptionNote, cellExample,
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
@@ -628,6 +628,23 @@ test('newDraft: "Same settings…" copies the run settings over the defaults, ne
   d.cfg.mapping.company_name = 'Other';
   assert.equal(run.settings.mapping.company_name, 'Name');
   assert.equal(d.file, null);
+});
+test('newDraft: a fresh draft has no file to reuse; "Same settings…" keeps the run’s file name', () => {
+  assert.equal(newDraft(SETUP_INFO, null).fromFile, null);
+  assert.equal(newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} }).fromFile, 'companies.xlsx');
+  assert.equal(newDraft(SETUP_INFO, { id: 'run_1', settings: {} }).fromFile, null);
+});
+test('reuseOffer: a "Same settings…" draft with no file offers the run’s file', () => {
+  const d = newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} });
+  assert.deepEqual(reuseOffer(d), { name: 'companies.xlsx', runId: 'run_1' });
+});
+test('reuseOffer: none for a fresh draft, a loaded file, a file being read, or a run with no file name', () => {
+  assert.equal(reuseOffer(newDraft(SETUP_INFO, null)), null);
+  const d = newDraft(SETUP_INFO, { id: 'run_1', file: 'companies.xlsx', settings: {} });
+  assert.equal(reuseOffer(Object.assign({}, d, { file: { name: 'companies.xlsx' } })), null);
+  assert.equal(reuseOffer(Object.assign({}, d, { reading: 'companies.xlsx' })), null);
+  assert.equal(reuseOffer(newDraft(SETUP_INFO, { id: 'run_1', settings: {} })), null);
+  assert.equal(reuseOffer(null), null);
 });
 test('mappingForFile: a fresh draft takes the detected mapping', () => {
   const file = upload();
