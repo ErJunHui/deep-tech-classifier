@@ -14,7 +14,7 @@ import {
   modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
-import { R, put, kbd } from './util.js';
+import { R, put, kbd, railBtn } from './util.js';
 import { moreHtml } from './table.js';
 
 /* The three quality levels, by tier. */
@@ -88,7 +88,7 @@ function headHtml() {
     ? '<span class="wb-file-n">' + esc(f.name) + '</span><span class="wb-num">' + esc(fileLine(f, d.mapping)) + '</span>'
     : '<span>' + (dr.fromId ? 'Settings and column mapping from <span class="wb-mono">' + esc(dr.fromId) + '</span>. ' : '') + 'Drop a spreadsheet anywhere in this column.</span>';
   if (f && dr.reading) meta += '<span>Reading ' + esc(dr.reading) + '…</span>';
-  const h = '<div class="wb-head-row"><div class="wb-head-t"><h1><span class="wb-h1-f">' + title + '</span> <span class="wb-status">Not started</span></h1><div class="wb-head-meta">' + meta + '</div></div>' +
+  const h = '<div class="wb-head-row">' + railBtn(S.drawer) + '<div class="wb-head-t"><h1><span class="wb-h1-f">' + title + '</span> <span class="wb-status">Not started</span></h1><div class="wb-head-meta">' + meta + '</div></div>' +
     (f ? '<div class="wb-head-acts"><button class="wb-btn wb-btn-sm" data-act="clear-file" data-fk="clear-file">Change file</button></div>' : '') + '</div>';
   const notes = [];
   if (f) {
@@ -110,6 +110,7 @@ export function renderSetupHead() {
   if (!setupShown()) return;
   const el = R('head');
   el.hidden = false;
+  el.classList.remove('is-bare');
   put(el, headHtml());
 }
 

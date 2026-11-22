@@ -23,5 +23,9 @@ export function put(el, html) {
 export const MOD = /Mac|iPhone|iPad/.test((navigator.platform || '') + (navigator.userAgent || '')) ? '⌘' : 'Ctrl';
 export const kbd = (...keys) => keys.map((k) => '<kbd>' + esc(k) + '</kbd>').join('');
 
+/* The head's Runs button, which opens the run rail as a drawer. styles.css
+   shows it only below 900px, where the rail is not a column. open: S.drawer. */
+export const railBtn = (open) => '<button class="wb-btn wb-btn-sm wb-railbtn" data-act="drawer" data-fk="drawer" aria-controls="wb-rail" aria-expanded="' + !!open + '">Runs</button>';
+
 /* The three criteria: [result.criteria key, mark letter, label]. */
 export const CRIT = [['innovation', 'I', 'Innovation'], ['scientific_foundation', 'S', 'Scientific foundation'], ['proprietary_ip', 'P', 'Proprietary IP']];

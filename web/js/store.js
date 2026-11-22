@@ -25,6 +25,10 @@ export const S = {
   forms: {}, // {formKey: {open, choice, note}}: decision form drafts
   collapsed: { facts: true },
   reading: false, detailW: null, filtersOpen: false,
+  // Small screens (model.NARROW_QUERY): one column, the rail as a drawer and
+  // the evidence panel over the table. drawer and panel are only ever true
+  // while narrow; a change of width closes both (commands.watchLayout).
+  narrow: false, drawer: false, panel: false,
   sessionRunIds: new Set(), // runs created in this browser session
   landed: {}, // {index: Date.now()} when a row's result arrived, for the wb-land animation
 };

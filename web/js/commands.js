@@ -5,11 +5,12 @@
    openHelp, paletteItems, openPalette, renderPalette, runPalette,
    closeModal, toggleReading, toggleNeeds, focusChips, focusSearch,
    stopOrResume, setPanelW/resetPanelW, the divider's pointer handlers,
-   download, and onRootKey's modal and divider keys. The pure rules are in
+   download, and onRootKey's modal and divider keys. Also the small-screen
+   layout: the run drawer and the evidence panel over the table. The pure rules are in
    model.js, the modal HTML in render/modal.js. events.js binds these and
    registers the row actions it owns (registerActions). */
 import * as api from './api.js';
-import { clamp, counts, dateLabel, paletteItems, downloadToast, panelWidth, parseUi, uiToStore, keptSelection } from './model.js';
+import { clamp, counts, dateLabel, paletteItems, downloadToast, panelWidth, parseUi, uiToStore, keptSelection, NARROW_QUERY, readingKeyAction } from './model.js';
 import { S, refreshView, renderDetail, stopActive, resumeActive, resumable } from './state.js';
 import { openSetup, showRun } from './setup.js';
 import { setupShown } from './store.js';
@@ -22,6 +23,7 @@ import { railStatus } from './render/rail.js';
 import { closePop } from './render/setup.js';
 import { toast } from './render/toast.js';
 import { renderHelp, renderPaletteShell, renderPaletteList, clearModal } from './render/modal.js';
+import { syncLayout } from './render/layout.js';
 
 const root = () => document.querySelector('.v-workbench');
 
@@ -47,7 +49,7 @@ export const CMDS = [
   { g: 'View', l: 'Reading view', k: ['E'], act: 'reading' },
   { g: 'View', l: 'Needs review only', k: ['A'], act: 'needs' },
   { g: 'View', l: 'Keyboard shortcuts', k: ['?'], act: 'help', setup: true },
-  { g: 'View', l: 'Leave the note, close the form or reading view', k: ['Esc'], menu: false },
+  { g: 'View', l: 'Leave the note; close the form, reading view or (narrow window) the panel', k: ['Esc'], menu: false },
   { g: 'View', l: 'Resize the panel (divider focused)', k: ['↑', '↓', '[', ']'], menu: false },
   { g: 'View', l: 'Reset the panel width', k: ['Double-click'], menu: false },
   { g: 'Run', l: 'New run: set it up in the table', k: ['O'], act: 'new-run', setup: true },
@@ -161,10 +163,12 @@ export function toggleNeeds() {
 }
 export function focusChips() {
   if (R('tools').hidden) return;
+  if (S.panel) closePanel(false, false); // the chips are under the panel
   if (getComputedStyle(R('chips')).display === 'none') { S.filtersOpen = true; renderChips(); }
   const c = R('chips').querySelector('.wb-chip'); if (c) c.focus();
 }
 export function focusSearch() {
+  if (S.panel && !R('tools').hidden) closePanel(false, false); // the search is under the panel
   const s = document.querySelector('[data-fk="search"]');
   if (s && !R('tools').hidden) s.focus();
 }
@@ -196,8 +200,13 @@ export function download() {
 }
 
 /* ---------- reading view ---------- */
-/* force: true or false sets it, otherwise it toggles. */
+/* force: true or false sets it, otherwise it toggles. In a narrow window the
+   panel already has the whole width, so E shows or hides it instead
+   (model.readingKeyAction) and the stored reading view is left as it was. */
 export function toggleReading(force) {
+  const act = readingKeyAction(S);
+  if (act === 'open-panel') { openPanel(false); return; }
+  if (act === 'close-panel') { closePanel(false); return; }
   S.reading = typeof force === 'boolean' ? force : !S.reading;
   root().classList.toggle('is-reading', S.reading);
   const top = R('detail').querySelector('[data-fk="reading"]');
@@ -273,6 +282,60 @@ export function loadUi() {
   const ui = parseUi(raw);
   S.reading = ui.reading;
   S.collapsed = ui.collapsed;
-  root().classList.toggle('is-reading', S.reading);
+  root().classList.toggle('is-reading', S.reading && !S.narrow);
   if (ui.detailW != null) setPanelW(ui.detailW);
+}
+
+/* ---------- small screens: run drawer and evidence panel ----------
+   Below model.NARROW_BELOW the rail is a drawer opened from the head's Runs
+   button and the evidence panel opens over the table when a row is picked
+   (render/layout.js applies the state). motion: the change came from a
+   pointer, so it slides; from the keyboard it switches at once. */
+const focusFk = (fk) => {
+  const b = root().querySelector('[data-fk="' + fk + '"]');
+  if (b) b.focus({ preventScroll: true });
+};
+export function openDrawer(motion) {
+  if (!S.narrow || S.drawer) return;
+  closePop(false);
+  S.drawer = true;
+  syncLayout(!!motion);
+  // The current item, else + New run: where a reviewer most likely goes next.
+  const cur = root().querySelector('.wb-rail [aria-current="true"]') || root().querySelector('[data-fk="new-run"]');
+  if (cur) cur.focus({ preventScroll: true });
+}
+/* restore (default true): focus goes back to the Runs button. */
+export function closeDrawer(motion, restore) {
+  if (!S.drawer) return;
+  S.drawer = false;
+  syncLayout(!!motion);
+  if (restore !== false) focusFk('drawer');
+}
+/* Opens the evidence panel over the table; focus goes to its Back button. */
+export function openPanel(motion) {
+  if (!S.narrow || !S.active || setupShown()) return;
+  if (!S.panel) { S.panel = true; syncLayout(!!motion); }
+  focusFk('panel-back');
+}
+/* Back to the list. restore (default true): focus goes to the selected
+   row, scrolled into view, as Esc in the note does when wide. */
+export function closePanel(motion, restore) {
+  if (!S.panel) return;
+  S.panel = false;
+  syncLayout(!!motion);
+  if (restore === false) return;
+  const b = S.selected != null && rowBtn(S.selected);
+  if (b) { if (b.scrollIntoView) b.scrollIntoView({ block: 'nearest' }); b.focus({ preventScroll: true }); }
+}
+/* Follows the window across model.NARROW_BELOW. Crossing it closes the drawer
+   and the panel without motion: neither has a meaning in the other layout. */
+export function watchLayout() {
+  const mq = window.matchMedia(NARROW_QUERY);
+  const apply = () => {
+    S.narrow = mq.matches;
+    S.drawer = false; S.panel = false;
+    syncLayout(false);
+  };
+  apply();
+  if (mq.addEventListener) mq.addEventListener('change', apply); else mq.addListener(apply);
 }

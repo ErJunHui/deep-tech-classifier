@@ -18,6 +18,7 @@ import { renderTable } from './render/table.js';
 import { toast } from './render/toast.js';
 import { renderSetup, setSetupChrome } from './render/setup.js';
 import { renderAnalyst } from './render/analyst.js';
+import { syncLayout } from './render/layout.js';
 
 const POLL_MS = 1000;
 const LIST_MS = 5000;
@@ -71,8 +72,9 @@ export function renderAll(opts) {
   renderRail();
   const setup = setupShown();
   setSetupChrome(setup);
-  if (setup) { renderSetup(); renderAnalyst(); renderDetail(); return; }
-  renderHead(opts); renderStrip(opts); renderChips(); renderTable(); renderDetail();
+  if (setup) { renderSetup(); renderAnalyst(); renderDetail(); }
+  else { renderHead(opts); renderStrip(opts); renderChips(); renderTable(); renderDetail(); }
+  syncLayout(); // after the head, whose Runs button carries the drawer state
 }
 /* After the run list or the open run changed: the rail only while setup is
    shown (rebuilding the setup would reset fields being typed in and the

@@ -628,3 +628,46 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-stat-s.is-wrap { width: 0; min-width: 100%; white-space: normal; }
 .v-workbench .wb-runitem-d { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v-workbench .wb-sempty .wb-snote { margin: 12px 0 0; text-align: left; }
+
+/* Small screens (below 900px, model.NARROW_QUERY; JS watches the same query, a
+   range so a zoomed 899.5px window is not left between the two layouts).
+   The main column takes the width. The run rail becomes a drawer opened from
+   the head's Runs button, and the evidence panel opens over the table when a
+   row is picked, with a Back bar (render/layout.js sets is-drawer and
+   is-panel). Reading view and the divider have no column to widen, so they
+   are hidden; E shows or hides the panel instead. Pointer-triggered opens and
+   closes slide (is-motion, 180ms); keyboard-triggered ones switch at once. */
+.v-workbench .wb-railbtn, .v-workbench .wb-pbar, .v-workbench .wb-railscrim, .v-workbench .wb-head.is-bare { display: none; }
+@media (width < 900px) {
+  .v-workbench, .v-workbench.is-reading, .v-workbench.is-setup { grid-template-columns: minmax(0, 1fr); }
+  .v-workbench .wb-railbtn { display: inline-flex; flex: none; }
+  .v-workbench .wb-head.is-bare { display: block; }
+  .v-workbench .wb-head.is-bare h1 { line-height: 26px; }
+
+  .v-workbench .wb-rail { position: absolute; top: 0; bottom: 0; left: 0; z-index: 35; width: min(300px, calc(100% - 48px)); border-right-color: var(--border-strong); box-shadow: var(--shadow-2); transform: translateX(-100%); visibility: hidden; }
+  .v-workbench.is-drawer .wb-rail { transform: none; visibility: visible; }
+  .v-workbench .wb-railscrim { display: block; position: absolute; inset: 0; z-index: 34; background: rgba(20, 20, 18, 0.22); opacity: 0; visibility: hidden; }
+  .v-workbench.is-drawer .wb-railscrim { opacity: 1; visibility: visible; }
+
+  .v-workbench .wb-side { position: absolute; inset: 0; z-index: 14; flex-direction: column; background: var(--surface); transform: translateX(100%); visibility: hidden; }
+  .v-workbench.is-panel .wb-side { transform: none; visibility: visible; }
+  .v-workbench .wb-divider, .v-workbench .wb-detail [data-fk="reading"] { display: none; }
+  .v-workbench .wb-detail { border-left: 0; }
+  .v-workbench .wb-pbar { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .v-workbench .wb-pbar-sp { flex: 1; }
+  .v-workbench .wb-d-top { padding: 14px 16px 12px; }
+  .v-workbench .wb-doc { padding: 0 16px; }
+
+  /* Closing keeps the element visible until it has slid out. */
+  .v-workbench.is-motion .wb-rail, .v-workbench.is-motion .wb-side { transition: transform 180ms var(--ease-out), visibility 0s linear 180ms; }
+  .v-workbench.is-motion.is-drawer .wb-rail, .v-workbench.is-motion.is-panel .wb-side { transition: transform 180ms var(--ease-out), visibility 0s; }
+  .v-workbench.is-motion .wb-railscrim { transition: opacity 180ms var(--ease-out), visibility 0s linear 180ms; }
+  .v-workbench.is-motion.is-drawer .wb-railscrim { transition: opacity 180ms var(--ease-out), visibility 0s; }
+
+  .v-workbench .wb-pop.is-set { width: min(380px, calc(100% - 32px)); }
+  .v-workbench .wb-pop.is-map { width: min(290px, calc(100% - 16px)); }
+  .v-workbench .wb-sheet { width: min(560px, 100%); }
+  .v-workbench .wb-help-b { grid-template-columns: minmax(0, 1fr); }
+  .v-workbench .wb-toasts { left: 12px; right: 12px; bottom: 16px; }
+  .v-workbench .wb-toast { max-width: min(400px, 100%); }
+}

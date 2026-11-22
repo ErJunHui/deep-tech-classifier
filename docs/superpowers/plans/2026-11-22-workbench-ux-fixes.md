@@ -29,7 +29,7 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 | 6 | The Reclassify form shows "A note is required…" in red before anything is typed | `render/detail.js` form hint | **Batch 2**, Task 4 |
 | 7 | The quick Settings popover enables Patent lookup with no warning when the EPO keys are missing | Settings popover | **Batch 2**, Task 5 |
 | 8 | Messages say "Ask your admin to add …", but this is a one-person local app. They also say to reload, but the server reads `.env` only at startup | `startProblem`, `render/analyst.js` | **Batch 2**, Task 6 |
-| 9 | Unusable below about 900px: the three columns never collapse | `styles.css` grid | Later |
+| 9 | Unusable below about 900px: the three columns never collapse | `styles.css` grid | **Batch 5**, Task 14 |
 | 10 | At 1024px the filter chips clip, the Criteria and Pat. columns disappear, and the Ctrl K hint clips | `styles.css` | **Batch 4**, Task 8 |
 | 11 | "Also in your file …" prints every unused column name in one long paragraph | `render/setup.js` | **Batch 4**, Task 10 |
 | 12 | The table moves down about 30px when a search or filter turns on the "Showing N of M" line | Tools row | **Batch 4**, Task 9 |
@@ -151,9 +151,26 @@ Not changed: the estimate note says "one company at a time" when not batching, b
 
 - [x] `model.paletteHeading(items, i)` gives "Actions", "Runs" or "Companies" where a group starts. Rows no longer carry the group label, and search still matches the group name.
 
+## Task 14 (#9): Small screens
+
+**Files:** `web/js/model.js`, `web/js/store.js`, `web/js/state.js`, `web/js/commands.js`, `web/js/events.js`, `web/js/main.js`, `web/js/render/layout.js` (new), `web/js/render/util.js`, `web/js/render/head.js`, `web/js/render/setup.js`, `web/index.html`, `web/styles.css`, `web/tests/model.test.js`
+
+Rule: below 900px (`@media (width < 900px)`, `model.NARROW_QUERY`) the workbench is one column. A range is used rather than `max-width: 899px`, because a zoomed window can be 899.5px wide and would match neither layout.
+- **Run rail:** a drawer opened by a **Runs** button at the start of the head (also shown with no run open, and while setting up). It closes on Esc, on the scrim and on picking a run, + New run or the draft. While it is open the main column and panel are inert, and only Esc, ?, O and Ctrl K act. Focus goes to the current run on open and back to Runs on close.
+- **Evidence panel:** opens over the table when a row is picked (click, Enter, or a company from the command menu), with a bar holding **Back** and Prev and Next. J, K and N update it in place, and moving in the list with the panel closed leaves it closed (`model.panelAfterSelect`). Esc closes the drawer, then the form, then the panel, and focus returns to the row (`model.escapeTarget`). In the note, Esc goes to Back. The selection rules of Task 1 are unchanged. / and F close the panel first, because the search and chips are under it.
+- **Reading view and divider:** both are hidden. E shows or hides the panel instead (`model.readingKeyAction`), and the stored reading view is left as it was for wide windows.
+- **Motion:** pointer-triggered opens and closes slide (180ms ease-out transform, `is-motion`). Keyboard-triggered ones (`click` with `detail` 0, Esc, E) switch at once. A render during a slide leaves it running, and `prefers-reduced-motion` turns it off.
+- **Overlays:** the settings popover fits the action bar's width, the column menu fits the window, Analyst settings is full width, the shortcuts sheet has one column, and toasts stay inside the window.
+- 900px and up are unchanged: 160/534/330 at 1024 and 200/760/480 at 1440.
+
+- [x] **Step 1:** Add tests for `NARROW_QUERY`, `isNarrow`, `escapeTarget`, `panelAfterSelect` and `readingKeyAction`.
+- [x] **Step 2:** Run the tests and confirm they fail.
+- [x] **Step 3:** Implement the rules in `model.js`. Add `render/layout.js` (`syncLayout`: classes, `inert` and the Runs button's `aria-expanded`), the drawer and panel commands and `watchLayout` (matchMedia) in `commands.js`, and the wiring in `events.js`. Add the Runs button to both heads, the panel bar and scrim to `index.html`, and the narrow block to `styles.css`.
+- [x] **Step 4:** Run the tests (152 pass). Browser check at 390x844, 768x1024 and 899x800: the drawer opens, closes on Esc, on the scrim and on a pick; a row opens the panel; J and K update it; Esc and Back return to the row; setup with `companies.xlsx`, the settings popover, the column menu, Analyst settings, the command menu and the shortcuts sheet fit, with no horizontal scroll. At 1024x768 and 1440x860 the columns and reading view are as before, also after resizing from 390 with the panel open. No console errors. Screenshots are in `.playwright-mcp/s9-*.png`.
+
 ## Next batches (proposed order)
 
 1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
 2. ~~Estimate correctness: #3.~~ Done in Batch 3.
 3. ~~Layout: #10, #12, #11, #14, #15 and #13.~~ Done in Batch 4.
-4. Small screens: #9.
+4. ~~Small screens: #9.~~ Done in Batch 5.

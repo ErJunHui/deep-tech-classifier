@@ -11,7 +11,7 @@
 <body>
 <div id="stage">
 <div class="v-workbench">
-  <aside class="wb-rail" aria-label="Runs">
+  <aside class="wb-rail" id="wb-rail" aria-label="Runs">
     <div class="wb-rail-top">
       <div class="wb-brand">Deep Tech Classifier</div>
       <button class="wb-btn wb-btn-primary wb-newrun" data-act="new-run" data-fk="new-run">+ New run <kbd>O</kbd></button>
@@ -36,9 +36,16 @@
     <div class="wb-dropover" aria-hidden="true">Drop to load this spreadsheet</div>
   </main>
   <div class="wb-side">
+    <div class="wb-pbar" role="toolbar" aria-label="Evidence panel">
+      <button class="wb-btn wb-btn-sm" data-act="panel-close" data-fk="panel-back" title="Back to the list (Esc)">&larr; Back</button>
+      <span class="wb-pbar-sp"></span>
+      <button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="row-prev" data-fk="panel-prev" aria-label="Previous company" title="Previous company (K)">&uarr; Prev</button>
+      <button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="row-next" data-fk="panel-next" aria-label="Next company" title="Next company (J)">&darr; Next</button>
+    </div>
     <div class="wb-divider" data-r="divider" role="separator" aria-orientation="vertical" aria-label="Resize evidence panel. Up or ] widens, down or [ narrows, Enter resets." tabindex="0"></div>
     <aside class="wb-detail" data-r="detail" aria-label="Company evidence"></aside>
   </div>
+  <div class="wb-railscrim" data-act="drawer-close" aria-hidden="true"></div>
   <div data-r="overlay"></div>
   <div data-r="pop"></div>
   <div data-r="modal"></div>

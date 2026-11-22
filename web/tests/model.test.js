@@ -13,6 +13,7 @@ import {
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
   keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote, batchSmallRunText,
   extraColumnsShort, paletteHeading,
+  NARROW_BELOW, NARROW_QUERY, isNarrow, escapeTarget, panelAfterSelect, readingKeyAction,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -1010,4 +1011,43 @@ test('batchSmallRunText: null at or above the threshold, or before any company i
 });
 test('batchSmallRunText: formats large thresholds', () => {
   assert.equal(batchSmallRunText(12, 1500), 'Batch jobs start at 1,500 companies. This run has 12, so it runs directly and this setting changes nothing.');
+});
+
+/* ---------- small screens (#9) ---------- */
+test('isNarrow: below 900px the workbench is one column; NARROW_QUERY matches the CSS', () => {
+  assert.equal(NARROW_BELOW, 900);
+  // A range, not max-width: 899px, so a zoomed window 899.5px wide is not left in between.
+  assert.equal(NARROW_QUERY, '(width < 900px)');
+  assert.equal(isNarrow(390), true);
+  assert.equal(isNarrow(899), true);
+  assert.equal(isNarrow(899.5), true);
+  assert.equal(isNarrow(900), false);
+  assert.equal(isNarrow(1024), false);
+});
+test('escapeTarget: wide keeps the old order, reading view then the form', () => {
+  const wide = { narrow: false, drawer: false, panel: false };
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: true, form: true })), 'reading');
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: false, form: true })), 'form');
+  assert.equal(escapeTarget(Object.assign({}, wide, { reading: false, form: false })), null);
+  // A panel flag left over from a narrow window does nothing when wide.
+  assert.equal(escapeTarget(Object.assign({}, wide, { panel: true })), null);
+});
+test('escapeTarget: narrow closes the drawer, then the form, then the evidence panel', () => {
+  const n = { narrow: true, drawer: false, panel: true, reading: true, form: true };
+  assert.equal(escapeTarget(Object.assign({}, n, { drawer: true })), 'drawer');
+  // Reading view has no meaning in one column, so it never takes an Esc.
+  assert.equal(escapeTarget(n), 'form');
+  assert.equal(escapeTarget(Object.assign({}, n, { form: false })), 'panel');
+  assert.equal(escapeTarget(Object.assign({}, n, { form: false, panel: false })), null);
+});
+test('panelAfterSelect: a pick opens the panel when narrow; J and K keep it as it is', () => {
+  assert.equal(panelAfterSelect({ narrow: true, panel: false, pick: true }), true);
+  assert.equal(panelAfterSelect({ narrow: true, panel: false, pick: false }), false);
+  assert.equal(panelAfterSelect({ narrow: true, panel: true, pick: false }), true);
+  assert.equal(panelAfterSelect({ narrow: false, panel: false, pick: true }), false);
+});
+test('readingKeyAction: E is reading view when wide, and shows or hides the panel when narrow', () => {
+  assert.equal(readingKeyAction({ narrow: false, panel: false }), 'reading');
+  assert.equal(readingKeyAction({ narrow: true, panel: false }), 'open-panel');
+  assert.equal(readingKeyAction({ narrow: true, panel: true }), 'close-panel');
 });

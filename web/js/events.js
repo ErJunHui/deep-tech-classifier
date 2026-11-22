@@ -13,9 +13,11 @@ import { record, restore, undo } from './decisions.js';
 import {
   registerActions, refreshFilters, toggleNeeds, focusChips, focusSearch, stopOrResume, toggleReading, download,
   openHelp, openPalette, paletteQuery, runPalette, closeModal, modalKey, saveUi,
+  openDrawer, closeDrawer, openPanel, closePanel,
   onDividerDown, onDividerMove, onDividerUp, onDividerDblClick, dividerKey,
 } from './commands.js';
-import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW, setupEscapeAction } from './model.js';
+import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW, setupEscapeAction,
+  escapeTarget, panelAfterSelect } from './model.js';
 import { R } from './render/util.js';
 import { renderChips } from './render/chips.js';
 import { renderTable, rowBtn } from './render/table.js';
@@ -28,7 +30,10 @@ const root = () => document.querySelector('.v-workbench');
 
 /* ---------- selection ---------- */
 /* Selects row index id. The table window grows to include it (it never
-   shrinks here), and the row is scrolled into view. */
+   shrinks here), and the row is scrolled into view. opts.pick: the user
+   chose this row (click, Enter, the command menu) rather than moving to it;
+   in a narrow window that opens the evidence panel over the table
+   (model.panelAfterSelect), sliding when opts.motion (a pointer). */
 export function select(id, opts) {
   const prev = S.selected;
   S.selected = id;
@@ -41,6 +46,8 @@ export function select(id, opts) {
     if (btn.scrollIntoView) btn.scrollIntoView({ block: 'nearest' });
     if (opts && opts.focus) btn.focus({ preventScroll: true });
   }
+  const pick = !!(opts && opts.pick);
+  if (pick && panelAfterSelect({ narrow: S.narrow, panel: S.panel, pick })) openPanel(!!opts.motion);
 }
 const focusInTable = () => R('table').contains(document.activeElement);
 export function move(delta) {
@@ -76,7 +83,7 @@ function goToCompany(id) {
     const s = document.querySelector('[data-fk="search"]'); if (s) s.value = '';
     refreshFilters();
   }
-  select(id, { focus: true });
+  select(id, { focus: true, pick: true });
 }
 
 /* ---------- decisions ---------- */
@@ -133,8 +140,11 @@ async function recordFromForm() {
     const b = R('detail').querySelector('[data-fk="change-dec"]'); if (b) b.focus({ preventScroll: true });
   }
 }
-/* Esc in the note: back to the table row; the draft is kept. */
+/* Esc in the note: back to the table row; the draft is kept. In a narrow
+   window the row is under the panel, so focus goes to the panel's Back
+   button and the next Esc closes the form. */
 function leaveNote() {
+  if (S.panel) { const back = document.querySelector('[data-fk="panel-back"]'); if (back) { back.focus({ preventScroll: true }); return; } }
   const b = rowBtn(S.selected);
   if (b) b.focus({ preventScroll: true }); else document.activeElement.blur();
 }
@@ -191,10 +201,21 @@ function setSetting(t, live) {
 function onClick(e) {
   const a = e.target.closest('[data-act]');
   const tr = e.target.closest('tr[data-row]');
-  if (!a && tr) { select(+tr.getAttribute('data-row')); return; }
+  // detail 0: a button pressed from the keyboard, which never animates.
+  const motion = e.detail > 0;
+  if (!a && tr) { select(+tr.getAttribute('data-row'), { pick: true, motion }); return; }
   if (!a || !root().contains(a)) return;
-  switch (a.getAttribute('data-act')) {
-    case 'select': select(+a.getAttribute('data-id'), { focus: true }); break;
+  const act = a.getAttribute('data-act');
+  // Picking from the drawer closes it first; focus lands on the Runs button,
+  // so leaving a new run's setup later returns there.
+  if (S.drawer && (act === 'open-run' || act === 'new-run' || act === 'open-draft')) closeDrawer(motion);
+  switch (act) {
+    case 'select': select(+a.getAttribute('data-id'), { focus: true, pick: true, motion }); break;
+    case 'drawer': if (S.drawer) closeDrawer(motion); else openDrawer(motion); break;
+    case 'drawer-close': closeDrawer(true); break;
+    case 'panel-close': closePanel(motion); break;
+    case 'row-prev': move(-1); break;
+    case 'row-next': move(1); break;
     case 'open-run': showRun(a.getAttribute('data-id')); break;
     case 'stop': stopActive(); break;
     case 'resume': resumeActive(); break;
@@ -343,6 +364,8 @@ function onRootKey(e) {
   if (S.modal && R('modal').contains(t)) { modalKey(e); return; }
   if (S.analyst && R('overlay').contains(t)) { sheetKey(e); return; }
   if (popKind() && R('pop').contains(t)) { popKey(e); return; }
+  // The drawer is on top of everything but the overlays above, setup included.
+  if (S.drawer && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDrawer(false); return; }
   if (setupShown()) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setupEscape(); }
     return;
@@ -363,15 +386,18 @@ function onRootKey(e) {
   }
 }
 
-/* Esc with nothing focused: leaves reading view, else closes the selected
-   row's decision form (its draft is kept). False when there was neither. */
+/* Esc with nothing focused (model.escapeTarget): wide, leaves reading view,
+   else closes the selected row's decision form (its draft is kept); narrow,
+   closes the run drawer, else the form, else the evidence panel. False when
+   there was nothing to close. */
 function escapeView() {
-  if (S.reading) { toggleReading(false); return true; }
   const form = S.active && S.selected != null ? S.forms[selectedKey()] : null;
-  if (!form || !form.open) return false;
-  form.open = false;
-  renderDetail();
-  return true;
+  const target = escapeTarget({ narrow: S.narrow, drawer: S.drawer, panel: S.panel, reading: S.reading, form: !!(form && form.open) });
+  if (target === 'drawer') closeDrawer(false);
+  else if (target === 'reading') toggleReading(false);
+  else if (target === 'form') { form.open = false; renderDetail(); }
+  else if (target === 'panel') closePanel(false);
+  return target != null;
 }
 
 /* Global shortcuts. Ctrl/⌘+K toggles the command menu anywhere, also in a
@@ -393,6 +419,15 @@ function onDocKey(e) {
     return;
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (S.drawer) {
+    // The drawer covers the run: only these keys, as while setting up.
+    if (e.key === 'Escape') closeDrawer(false);
+    else if (e.key === '?') openHelp();
+    else if (e.key === 'o' || e.key === 'O') { closeDrawer(false); openSetup(null); }
+    else return;
+    e.preventDefault();
+    return;
+  }
   if (setupShown()) {
     // Setting up a new run: only these keys; the rest act on a run.
     if (e.key === 'Escape') setupEscape();

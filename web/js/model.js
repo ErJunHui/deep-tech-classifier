@@ -643,3 +643,40 @@ export function setupEscapeAction(draft) {
 export function cancelHintsEsc(draft) {
   return setupEscapeAction(draft) === 'discard';
 }
+
+/* ---------- small screens ----------
+   Below 900px the three columns do not fit: the main column takes the width,
+   the run rail becomes a drawer and the evidence panel opens over the table.
+   NARROW_QUERY is the media query the JS watches; styles.css uses the same
+   @media (width < 900px). A range rather than max-width: 899px, because a
+   zoomed window can be 899.5px wide and would match neither layout. */
+export const NARROW_BELOW = 900;
+export const NARROW_QUERY = '(width < ' + NARROW_BELOW + 'px)';
+export const isNarrow = (width) => width < NARROW_BELOW;
+
+/* What Esc closes when no field, overlay or setup takes it, from
+   {narrow, drawer, panel, reading, form} (form: the selected row's decision
+   form is open). Wide: reading view, then the form. Narrow: the run drawer,
+   then the form, then the evidence panel; reading view has no meaning in one
+   column. null: nothing to close. */
+export function escapeTarget(st) {
+  if (st.narrow && st.drawer) return 'drawer';
+  if (!st.narrow && st.reading) return 'reading';
+  if (st.form) return 'form';
+  if (st.narrow && st.panel) return 'panel';
+  return null;
+}
+
+/* Whether the evidence panel is open after a row is selected, from
+   {narrow, panel, pick}. pick: the user chose the row (click, Enter, the
+   command menu); otherwise it was a move (J, K, N, Home, End), which keeps
+   the panel as it was so the list can be browsed without it. Only narrow
+   windows open the panel; wide ones always show it as a column. */
+export const panelAfterSelect = (st) => !!st.narrow && (!!st.pick || !!st.panel);
+
+/* What E does, from {narrow, panel}: reading view when wide; when narrow the
+   panel already takes the whole width, so E shows or hides it instead. */
+export function readingKeyAction(st) {
+  if (!st.narrow) return 'reading';
+  return st.panel ? 'close-panel' : 'open-panel';
+}
