@@ -126,7 +126,8 @@ function focusNote() {
 async function recordFromForm() {
   const v = selectedView(); if (!decidable(v)) return;
   const form = S.forms[selectedKey()];
-  if (!form || formProblem(v, form)) { syncForm(); return; }
+  if (!form) return;
+  if (formProblem(v, form)) { form.tried = true; syncForm(); return; }
   const index = v.row.index;
   if (await record(index, form.choice, form.note.trim()) && S.selected === index) {
     const b = R('detail').querySelector('[data-fk="change-dec"]'); if (b) b.focus({ preventScroll: true });

@@ -4,7 +4,7 @@
    sheetBodyHtml. It is a modal dialog: S.analyst is true while it is open,
    global shortcuts are off, Tab stays inside it (trapTab) and closing it
    returns focus to the control that opened it. */
-import { esc, money, fmtDur, startProblem, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
+import { esc, money, fmtDur, startProblem, missingKeyText, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
 import { QUALITY, draftProvider, batchOffText, closePop, openSettings } from './setup.js';
@@ -100,7 +100,7 @@ function bodyHtml() {
   const d = S.draft.cfg; const prov = draftProvider(); const setup = S.setup;
   let h = '<fieldset class="wb-fs"><legend>Model</legend><div class="wb-provs" role="radiogroup" aria-label="Provider">' + setup.providers.map((p) =>
     '<label class="wb-opt"><input type="radio" name="wb-prov" value="' + esc(p.id) + '" data-fk="prov-' + esc(p.id) + '"' + (p.id === d.provider ? ' checked' : '') + '><span class="wb-opt-t">' + esc(p.label) + '</span><span class="wb-opt-s ' + (p.keySet ? 'is-ok' : 'is-miss') + '">' + (p.keySet ? 'Key set' : esc(p.keyVar) + ' missing') + '</span></label>').join('') + '</div>';
-  if (prov && !prov.keySet) h += '<div class="wb-warn">' + esc(prov.label) + ' is not set up yet. Ask your admin to add ' + esc(prov.keyVar) + ' to .env, then reload.</div>';
+  if (prov && !prov.keySet) h += '<div class="wb-warn">' + esc(prov.label) + ' is not set up yet. ' + esc(missingKeyText(prov.keyVar)) + '</div>';
   if (prov) {
     h += '<div class="wb-tiers" role="radiogroup" aria-label="Tier">' + QUALITY.map((q) =>
       '<label class="wb-opt"><input type="radio" name="wb-tier" value="' + q.tier + '" data-fk="tier-' + q.tier + '"' + (q.tier === d.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + ' · ' + esc(prov.tiers[q.tier]) + '</span><span class="wb-opt-s wb-num">' + q.tier + ' tier</span></label>').join('') + '</div>';

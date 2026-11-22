@@ -59,6 +59,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .v-workbench .wb-btn-primary:hover { background: var(--accent); filter: brightness(1.08); }
 .v-workbench .wb-btn-primary:disabled { background: var(--accent); filter: none; }
+.v-workbench .wb-form-acts .wb-btn[aria-disabled="true"] { opacity: 0.45; cursor: not-allowed; transform: none; }
 .v-workbench .wb-btn-ghost { border-color: transparent; background: transparent; color: var(--text-2); }
 .v-workbench .wb-btn-ghost:hover { background: var(--surface-2); color: var(--text); }
 .v-workbench .wb-btn-sm { height: 26px; padding: 0 8px; font-size: 12px; }
@@ -534,6 +535,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-switch:checked { background: var(--accent); }
 .v-workbench .wb-switch:checked::before { transform: translateX(12px); }
 .v-workbench .wb-switch:disabled { opacity: 0.5; cursor: not-allowed; }
+.v-workbench .wb-tg-s.is-warn { color: var(--escalate); }
 .v-workbench .wb-th-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 .v-workbench .wb-thf { display: grid; grid-template-columns: 1fr 64px; gap: 1px 8px; align-items: center; font-size: 12.5px; }
 .v-workbench .wb-thf .wb-input { text-align: right; font-variant-numeric: tabular-nums; padding-right: 6px; }

@@ -11,7 +11,7 @@ import {
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
-  keptSelection, setupEscapeAction, cancelHintsEsc,
+  keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -939,4 +939,50 @@ test('setupEscapeAction: nothing while Start is in flight or without a draft', (
 test('cancelHintsEsc: the Cancel button shows Esc only when Esc would also discard', () => {
   assert.equal(cancelHintsEsc(draftWith({})), true);
   assert.equal(cancelHintsEsc(draftWith({ file: { name: 'a.xlsx' } })), false);
+});
+
+/* ---------- decision form hint (#6) ---------- */
+test('formHint: a missing note is a quiet instruction until Record is tried', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  const quiet = formHint(clear, { choice: 'change', note: '' });
+  assert.equal(quiet.tone, 'pending');
+  assert.equal(quiet.text, 'Add a note to change a Clear verdict. It is written to the workbook.');
+  const tried = formHint(clear, { choice: 'change', note: '', tried: true });
+  assert.equal(tried.tone, 'error');
+  assert.equal(tried.text, 'A note is required to overturn a Clear verdict. It is written to the workbook.');
+});
+test('formHint: no outcome yet is pending, then an error once tried', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  assert.deepEqual(formHint(clear, { choice: '', note: '' }), { tone: 'pending', text: 'Choose an outcome.' });
+  assert.deepEqual(formHint(clear, { choice: '', note: '', tried: true }), { tone: 'error', text: 'Choose an outcome.' });
+});
+test('formHint: a complete form is ok and has no problem text', () => {
+  const clear = rowView(row(0, result({ risk: 'Clear' })));
+  assert.deepEqual(formHint(clear, { choice: 'change', note: 'Has a lab.', tried: true }), { tone: 'ok', text: '' });
+});
+
+/* ---------- missing key wording (#8) ---------- */
+test('missingKeyText: names the file and says to restart the app, not to ask an admin', () => {
+  const t = missingKeyText('ANTHROPIC_API_KEY');
+  assert.equal(t, 'Add ANTHROPIC_API_KEY to the .env file in the project folder, then restart the app (python serve.py).');
+});
+test('startProblem: a missing key uses the restart wording and offers another provider', () => {
+  const draft = named([]);
+  const setup = { providers: [{ id: 'openai', label: 'OpenAI', keyVar: 'OPENAI_API_KEY', keySet: false, batch: false }] };
+  const p = startProblem(draft, setup);
+  assert.equal(p.text, missingKeyText('OPENAI_API_KEY') + ' Or choose another provider in Analyst settings.');
+  assert.doesNotMatch(p.text, /admin/);
+});
+
+/* ---------- setup row status (#5) ---------- */
+test('setupRowStatus: nothing is queued before Start; only left-out rows say so', () => {
+  assert.equal(setupRowStatus(false), '');
+  assert.equal(setupRowStatus(true), 'Left out');
+});
+
+/* ---------- quick settings: patent lookup without EPO keys (#7) ---------- */
+test('quickStepNote: patent lookup warns when the EPO keys are missing', () => {
+  assert.deepEqual(quickStepNote('epo', { epoKeysSet: false }), { warn: true, text: 'EPO keys missing, so the run continues without patents.' });
+  assert.equal(quickStepNote('epo', { epoKeysSet: true }), null);
+  assert.equal(quickStepNote('enrichment', { epoKeysSet: false }), null);
 });

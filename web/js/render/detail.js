@@ -9,7 +9,7 @@
    plain sentence, only when it was), the reasoning, then the evidence, then
    the audit detail (confidence, validator, history) and a one-line footer of
    run metadata. Colour marks only what still needs a decision. */
-import { esc, money, signed, flip, vLabel, vLow, actionFor, confWord, hhmm, rowView, formProblem, needsNote, formKey } from '../model.js';
+import { esc, money, signed, flip, vLabel, vLow, actionFor, confWord, hhmm, rowView, formProblem, formHint, needsNote, formKey } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd, MOD, CRIT } from './util.js';
 
@@ -96,18 +96,22 @@ function decisionArea(run, v) {
 const NOTE_REQUIRED = 'Why the pipeline verdict is wrong (required, written to the workbook)';
 const NOTE_OPTIONAL = 'Note for the record (optional)';
 const whyOk = (req) => (req ? 'The note will be written to the workbook.' : kbd('Esc') + ' leaves the note, the draft is kept');
+/* The hint's class and HTML (model.formHint): grey until Record is tried. */
+const hintClass = (h) => 'wb-form-why' + (h.tone === 'error' ? '' : ' is-ok');
+const hintHtml = (h, req) => (h.tone === 'ok' ? whyOk(req) : esc(h.text));
 
 function formHtml(v, form) {
   const pv = v.r.verdict;
   const req = form.choice ? needsNote(v, form.choice) : false;
   const prob = formProblem(v, form);
+  const hint = formHint(v, form);
   return '<div class="wb-form"><div class="wb-seg" role="radiogroup" aria-label="Outcome">' +
     '<label title="Shortcut: C"><input type="radio" name="wb-dec" value="confirm" data-fk="dec-confirm"' + (form.choice === 'confirm' ? ' checked' : '') + '>' + (v.flagged ? 'Confirm ' : 'Keep ') + vLow(pv) + '</label>' +
     '<label title="Shortcut: X"><input type="radio" name="wb-dec" value="change" data-fk="dec-change"' + (form.choice === 'change' ? ' checked' : '') + '>Change to ' + vLow(flip(pv)) + '</label></div>' +
     '<textarea data-fk="note" aria-label="Reviewer note" placeholder="' + (req ? NOTE_REQUIRED : NOTE_OPTIONAL) + '">' + esc(form.note) + '</textarea>' +
-    '<div class="wb-form-acts"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="record" data-fk="record"' + (prob ? ' disabled' : '') + '>Record ' + kbd(MOD, '↵') + '</button>' +
+    '<div class="wb-form-acts"><button class="wb-btn wb-btn-sm wb-btn-primary" data-act="record" data-fk="record"' + (prob ? ' aria-disabled="true"' : '') + '>Record ' + kbd(MOD, '↵') + '</button>' +
     '<button class="wb-btn wb-btn-sm wb-btn-ghost" data-act="cancel-form" data-fk="cancel-form">Cancel</button>' +
-    '<span class="wb-form-why ' + (prob ? '' : 'is-ok') + '" data-r="form-why">' + (prob ? esc(prob) : whyOk(req)) + '</span></div></div>';
+    '<span class="' + hintClass(hint) + '" data-r="form-why" aria-live="polite">' + hintHtml(hint, req) + '</span></div></div>';
 }
 
 /* Brings the open form's Record button, hint and note placeholder up to date
@@ -122,9 +126,11 @@ export function syncForm() {
   const el = R('detail');
   const prob = formProblem(v, form);
   const req = form.choice ? needsNote(v, form.choice) : false;
-  const b = el.querySelector('[data-fk="record"]'); if (b) b.disabled = !!prob;
+  const hint = formHint(v, form);
+  const b = el.querySelector('[data-fk="record"]');
+  if (b) { if (prob) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled'); }
   const w = el.querySelector('[data-r="form-why"]');
-  if (w) { w.className = 'wb-form-why ' + (prob ? '' : 'is-ok'); w.innerHTML = prob ? esc(prob) : whyOk(req); }
+  if (w) { w.className = hintClass(hint); w.innerHTML = hintHtml(hint, req); }
   const ta = el.querySelector('[data-fk="note"]');
   if (ta) ta.placeholder = req ? NOTE_REQUIRED : NOTE_OPTIONAL;
 }

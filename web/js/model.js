@@ -291,8 +291,28 @@ export function formProblem(view, form) {
   if (needsNote(view, form.choice) && !form.note.trim()) return 'A note is required to overturn a Clear verdict. It is written to the workbook.';
   return '';
 }
+/* The form's hint {tone, text}. tone 'ok' (text empty: the caller shows its
+   own line), 'pending' (a quiet instruction while the form is incomplete)
+   or 'error' (form.tried: Record was attempted while incomplete). */
+export function formHint(view, form) {
+  const prob = formProblem(view, form);
+  if (!prob) return { tone: 'ok', text: '' };
+  if (form.tried) return { tone: 'error', text: prob };
+  if (needsNote(view, form.choice)) return { tone: 'pending', text: 'Add a note to change a Clear verdict. It is written to the workbook.' };
+  return { tone: 'pending', text: prob };
+}
 
 /* ---------- new run setup ---------- */
+/* What to do about a missing API key. The server reads .env only when it
+   starts, so a reload is not enough. */
+export const missingKeyText = (keyVar) => 'Add ' + keyVar + ' to the .env file in the project folder, then restart the app (python serve.py).';
+/* A setup row's Status cell before Start: nothing is queued yet. */
+export const setupRowStatus = (out) => (out ? 'Left out' : '');
+/* A note under a quick-settings step, or null. setup is GET /api/setup. */
+export function quickStepNote(key, setup) {
+  if (key === 'epo' && !setup.epoKeysSet) return { warn: true, text: 'EPO keys missing, so the run continues without patents.' };
+  return null;
+}
 /* Rows of an uploaded file left blank in the mapped company name column; the
    pipeline skips them. file is the inspect dict from POST /api/files. */
 export const skippedCount = (file, mapping) => file.emptyCounts[mapping.company_name] || 0;
@@ -327,7 +347,7 @@ export function startProblem(draft, setup) {
   if (!tickedCount(draft)) return { fix: 'rows', label: 'Tick at least one company to start', text: 'Every company is left out. Tick the ones to classify.' };
   const p = setup.providers.find((x) => x.id === d.provider);
   if (!p) return { fix: 'sheet', label: 'Choose a provider to start', text: 'The selected provider is not available. Choose another provider in Analyst settings.' };
-  if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: 'Ask your admin to add ' + p.keyVar + ' to .env, or choose another provider in Analyst settings.' };
+  if (!p.keySet) return { fix: 'sheet', label: p.keyVar + ' is not set in .env', text: missingKeyText(p.keyVar) + ' Or choose another provider in Analyst settings.' };
   return null;
 }
 

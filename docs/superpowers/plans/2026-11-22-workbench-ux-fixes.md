@@ -25,10 +25,10 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 | 2 | A filter can hide the selected company while the evidence panel keeps showing it | `commands.js` `refreshFilters` | **Batch 1**, Task 1 |
 | 3 | The estimate ignores Batch mode: cost and duration stay the same when it is toggled | Analyst settings, `/api/estimate` | Later |
 | 4 | Esc discards a set-up run (uploaded file and mappings) with no confirmation and no undo | `events.js` `setupEscape` | **Batch 1**, Task 2 |
-| 5 | Setup rows say "Queued" before the run has started | `render/setup.js` | Later |
-| 6 | The Reclassify form shows "A note is required…" in red before anything is typed | `render/detail.js` form hint | Later |
-| 7 | The quick Settings popover enables Patent lookup with no warning when the EPO keys are missing | Settings popover | Later |
-| 8 | Messages say "Ask your admin to add …", but this is a one-person local app | `startProblem` / setup bar | Later |
+| 5 | Setup rows say "Queued" before the run has started | `render/setup.js` | **Batch 2**, Task 3 |
+| 6 | The Reclassify form shows "A note is required…" in red before anything is typed | `render/detail.js` form hint | **Batch 2**, Task 4 |
+| 7 | The quick Settings popover enables Patent lookup with no warning when the EPO keys are missing | Settings popover | **Batch 2**, Task 5 |
+| 8 | Messages say "Ask your admin to add …", but this is a one-person local app. They also say to reload, but the server reads `.env` only at startup | `startProblem`, `render/analyst.js` | **Batch 2**, Task 6 |
 | 9 | Unusable below about 900px: the three columns never collapse | `styles.css` grid | Later |
 | 10 | At 1024px the filter chips clip, the Criteria and Pat. columns disappear, and the Ctrl K hint clips | `styles.css` | Later |
 | 11 | "Also in your file …" prints every unused column name in one long paragraph | `render/setup.js` | Later |
@@ -72,9 +72,43 @@ The **Cancel** button still discards. Its `Esc` hint is shown only when Esc woul
 - [x] **Step 3:** Implement both in `model.js`. Add `parkSetup()` to `setup.js`. Route `setupEscape` in `events.js` through `setupEscapeAction`. Show the Cancel button's Esc hint only when `cancelHintsEsc(dr)` is true. Update the label in `commands.js`.
 - [x] **Step 4:** Run the tests and confirm they pass. In the browser: upload `companies.xlsx`, press Esc, and check that the run view shows, the sidebar shows the parked draft and the toast appears. Press O and check that the draft is back with its rows and mappings. Press Cancel and check that the draft is gone. Open a new run with no file, press Esc, and check that the draft is discarded.
 
+## Task 3 (#5): No "Queued" before Start
+
+**Files:** `web/js/model.js`, `web/js/render/setup.js`, `web/tests/model.test.js`
+
+Rule: before Start, a setup row's Status cell is empty. Only a row the user has unticked says "Left out". "Queued" appears only once a run is actually running, as it does today in `render/table.js` and `render/detail.js`.
+
+- [x] Test `setupRowStatus(out)`, implement it, and use it in `render/setup.js`.
+- [x] Browser check: ticked rows are blank, and an unticked row says "Left out".
+
+## Task 4 (#6): The note hint turns red only after an attempt
+
+**Files:** `web/js/model.js`, `web/js/render/detail.js`, `web/js/events.js`, `web/styles.css`, `web/tests/model.test.js`
+
+Rule: while the form is incomplete, the hint is a grey instruction: "Add a note to change a Clear verdict…" or "Choose an outcome." It becomes the red message only after Record is tried (`form.tried`, set by `recordFromForm`). Record uses `aria-disabled` instead of `disabled`, so it still looks unavailable but a click counts as an attempt. The faded style is limited to `.wb-form-acts`, so the setup bar's Start button keeps its own style.
+
+- [x] Test `formHint(view, form)` (`ok`, `pending` or `error`), implement it, and wire it into `formHtml`, `syncForm` and `recordFromForm`.
+- [x] Browser check: on opening Reclassify on a Clear row the hint is grey. Clicking Record turns it red. Typing a note clears it and enables Record. Cancel leaves `decisions.json` untouched.
+
+## Task 5 (#7): Patent lookup warns about missing EPO keys in quick Settings
+
+**Files:** `web/js/model.js`, `web/js/render/setup.js`, `web/styles.css`, `web/tests/model.test.js`
+
+- [x] Test `quickStepNote(key, setup)`, implement it, and when the keys are missing show "EPO keys missing, so the run continues without patents." in the warning colour.
+- [x] Browser check: with no EPO keys, the "Check patent records" row shows the warning.
+
+## Task 6 (#8): Tell the user what to do about a missing key
+
+**Files:** `web/js/model.js`, `web/js/render/analyst.js`, `web/tests/model.test.js`
+
+The server loads `.env` once, in `serve.py`, and `/api/setup` reads `os.environ`. A page reload therefore never picks up a new key, so the old "then reload" advice was wrong.
+
+- [x] Test `missingKeyText(keyVar)`: "Add X to the .env file in the project folder, then restart the app (python serve.py)." Use it in `startProblem` and in the Analyst settings warning.
+- [x] Browser check: the setup bar and Analyst settings both show the new wording, and neither mentions an admin.
+
 ## Next batches (proposed order)
 
-1. Copy and states: #5, #6, #8 and #7.
+1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
 2. Estimate correctness: #3. This needs a look at `webapp/estimate.py`.
 3. Layout: #10, #12, #11, #14, #15 and #13.
 4. Small screens: #9.

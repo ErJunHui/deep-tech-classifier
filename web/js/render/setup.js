@@ -11,7 +11,7 @@
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc,
+  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
@@ -143,7 +143,7 @@ function rowHtml(i, cells, cols, enter) {
       else inner = '<span class="' + (fl.key === 'company_name' ? 'wb-sname' : fl.key === 'uen' ? 'wb-mono' : fl.key === 'description' ? 'wb-dim' : '') + '">' + esc(v) + '</span>';
       return '<td class="wb-s-' + fl.key + '"' + (v.trim() ? ' title="' + esc(v) + '"' : '') + '>' + inner + '</td>';
     }).join('') +
-    '<td class="wb-s-status"><span class="wb-queued">' + (out ? 'Left out' : 'Queued') + '</span></td></tr>';
+    '<td class="wb-s-status"><span class="wb-queued">' + setupRowStatus(out) + '</span></td></tr>';
 }
 
 /* opts.enter: the rows fade in, and the table starts at the top. */
@@ -282,7 +282,8 @@ function settingsPopHtml() {
     '<label class="wb-opt"><input type="radio" name="wb-q" value="' + q.tier + '" data-fk="q-' + q.tier + '"' + (d.tier === q.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + (q.tier === S.setup.defaults.tier ? ' <span class="wb-tag is-auto">Recommended</span>' : '') + tierPriceHtml(prov, q.tier) + '</span><span class="wb-opt-s">' + q.sub + (prov ? ' Uses ' + esc(prov.tiers[q.tier]) + '.' : '') + '</span></label>').join('') + '</div></fieldset>' +
     '<fieldset class="wb-fs"><legend>What to check</legend>' + PLAIN_STEPS.map((s) => {
       const off = s.key === 'batch' && !!prov && !prov.batch;
-      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s">' + esc(off ? batchOffText(prov) : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
+      const note = off ? null : quickStepNote(s.key, S.setup);
+      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s' + (note ? ' is-warn' : '') + '">' + esc(off ? batchOffText(prov) : note ? note.text : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
     }).join('') + '</fieldset>' +
     '<div class="wb-pop-foot"><button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="analyst-open" data-fk="analyst-open">Analyst settings…</button><button class="wb-btn wb-btn-sm" data-act="settings-done" data-fk="settings-done">Done</button></div>';
 }
