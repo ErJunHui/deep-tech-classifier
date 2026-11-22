@@ -171,6 +171,11 @@ class ApiTest(unittest.TestCase):
         r = self.client.post("/api/estimate", content=b"{not json", headers={"content-type": "application/json"})
         self.assertIn(r.status_code, (400, 422))
 
+    def test_setup_and_estimate_use_the_same_batch_threshold(self):
+        threshold = self.client.get("/api/setup").json()["batchMinCompanies"]
+        r = self.client.post("/api/estimate", json={"settings": {"batch": True}, "rows": 4})
+        self.assertEqual(r.json()["batchMin"], threshold)
+
     # --- runs ---
 
     def test_upload_then_start_then_poll_to_complete(self):

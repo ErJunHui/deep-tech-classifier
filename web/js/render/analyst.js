@@ -7,7 +7,7 @@
 import { esc, money, fmtDur, startProblem, missingKeyText, modelFor, pinUnpriced, estimateNote, unknownCostLine, ESTIMATE_FAILED, ESTIMATE_SAMPLE, SETTING_BOUNDS } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
-import { QUALITY, draftProvider, batchOffText, closePop, openSettings } from './setup.js';
+import { QUALITY, draftProvider, batchOffText, batchSmallText, closePop, openSettings } from './setup.js';
 
 const THRESHOLDS = [
   { key: 'validatorThreshold', label: 'Validation threshold', help: 'Validator runs below this confidence', needs: 'validator' },
@@ -114,7 +114,7 @@ function bodyHtml() {
     tg('enrichment', 'Web enrichment', 'Search the web for a current description before classifying') +
     tg('epo', 'Patent lookup', 'EPO patent data adjusts confidence by up to ±' + esc(d.epoAdjustMax) + (setup.epoKeysSet ? ' · EPO keys set' : ' · EPO keys missing; the run continues without patents')) +
     tg('validator', 'Validation', 'A second pass searches the web when confidence is below ' + esc(d.validatorThreshold) + ', then confirms, overrides or escalates') +
-    tg('batch', 'Batch mode', noBatch ? esc(batchOffText(prov)) : 'Classify all companies in one batch job: about half the classifier cost, but results can take an hour or more', noBatch) +
+    tg('batch', 'Batch mode', noBatch ? esc(batchOffText(prov)) : esc(batchSmallText() || 'Classify all companies in one batch job: about half the classifier cost, but results can take an hour or more'), noBatch) +
     '</fieldset>';
   h += '<fieldset class="wb-fs"><legend>Thresholds</legend><div class="wb-th-grid">' + THRESHOLDS.map((t) => {
     const off = t.needs && !d[t.needs];

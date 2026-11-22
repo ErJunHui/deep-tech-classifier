@@ -23,7 +23,7 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 |---|---|---|---|
 | 1 | The modal backdrop seemed to leave the evidence panel undimmed | `.wb-mscrim` | **Not a bug.** Pixel sampling shows the panel dims from 255 to 203, the same as the table. The white panel only looked brighter at a glance. |
 | 2 | A filter can hide the selected company while the evidence panel keeps showing it | `commands.js` `refreshFilters` | **Batch 1**, Task 1 |
-| 3 | The estimate ignores Batch mode: cost and duration stay the same when it is toggled | Analyst settings, `/api/estimate` | Later |
+| 3 | The estimate ignores Batch mode: cost and duration stay the same when it is toggled | Analyst settings, `/api/estimate` | **Batch 3**, Task 7. The estimate was right; the toggle text was wrong. |
 | 4 | Esc discards a set-up run (uploaded file and mappings) with no confirmation and no undo | `events.js` `setupEscape` | **Batch 1**, Task 2 |
 | 5 | Setup rows say "Queued" before the run has started | `render/setup.js` | **Batch 2**, Task 3 |
 | 6 | The Reclassify form shows "A note is required…" in red before anything is typed | `render/detail.js` form hint | **Batch 2**, Task 4 |
@@ -106,9 +106,22 @@ The server loads `.env` once, in `serve.py`, and `/api/setup` reads `os.environ`
 - [x] Test `missingKeyText(keyVar)`: "Add X to the .env file in the project folder, then restart the app (python serve.py)." Use it in `startProblem` and in the Analyst settings warning.
 - [x] Browser check: the setup bar and Analyst settings both show the new wording, and neither mentions an admin.
 
+## Task 7 (#3): Explain why Batch mode changes nothing on a small run
+
+**Files:** `webapp/settings_map.py`, `webapp/estimate.py`, `webapp/app.py`, `web/js/model.js`, `web/js/render/setup.js`, `web/js/render/analyst.js`, `tests/test_webapp/test_estimate.py`, `tests/test_webapp/test_api.py`, `web/tests/model.test.js`
+
+**Cause:** the pipeline uses a batch job only from `batch.min_companies` companies (100 by default; `pipeline/orchestrator.py`, `pipeline/parallel.py`). Below that it classifies directly, whatever the toggle says. The estimate already followed this rule, so for 4 companies it was right not to change. The toggle text was wrong: it promised half the classifier cost and an hour-plus wait that never apply to such a run. A second, smaller mismatch: the estimate used the hard-coded default, while a run reads `batch.min_companies` from `config.json`.
+
+- [x] `settings_map.batch_min_companies(config)` reads `batch.min_companies` as the pipeline does, falling back to the default when it is missing or not a whole number of at least 1. `app.py` passes the value from the run's base config to `estimate_request` and to `setup_info`. The response gains `batchMin` and `/api/setup` gains `batchMinCompanies`.
+- [x] `model.batchSmallRunText(rows, batchMin)` gives "Batch jobs start at 100 companies. This run has 4, so it runs directly and this setting changes nothing." It returns null at or above the threshold, or when no company is ticked. Both the quick Settings toggle and the Analyst settings toggle show it.
+- [x] Tests: Python (threshold read from config, passed through `estimate_request`, reported by setup and estimate, and the same value in both API answers) and Node (`batchSmallRunText`).
+- [x] Browser check, after restarting the server: with `companies.xlsx` (4 rows), both toggles show the explanation, and `/api/setup` reports `batchMinCompanies: 100`.
+
+Not changed: the estimate note says "one company at a time" when not batching, but per-company steps run on `DEFAULT_WORKERS` workers. This is worth rewording in the copy batch.
+
 ## Next batches (proposed order)
 
 1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
-2. Estimate correctness: #3. This needs a look at `webapp/estimate.py`.
+2. ~~Estimate correctness: #3.~~ Done in Batch 3.
 3. Layout: #10, #12, #11, #14, #15 and #13.
 4. Small screens: #9.

@@ -14,7 +14,7 @@ from pipeline.llm_provider import get_cost_rates  # noqa: E402
 from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
-from webapp.settings_map import clean_settings, setup_info  # noqa: E402
+from webapp.settings_map import batch_min_companies, clean_settings, setup_info  # noqa: E402
 
 
 def _settings(**overrides) -> dict:
@@ -51,7 +51,7 @@ class EstimateTest(unittest.TestCase):
     def test_result_shape_and_tier_model(self):
         e = estimate(_settings(tier="balanced"), 10)
         self.assertEqual(
-            set(e), {"known", "model", "pricedAs", "pinned", "batch", "cost", "secs", "parts"}
+            set(e), {"known", "model", "pricedAs", "pinned", "batch", "batchMin", "cost", "secs", "parts"}
         )
         self.assertEqual(e["model"], models.CANDIDATES["anthropic"]["balanced"][0])
         self.assertAlmostEqual(e["cost"], sum(e["parts"].values()))
@@ -91,6 +91,15 @@ class EstimateTest(unittest.TestCase):
     def test_small_run_is_not_estimated_as_a_batch(self):
         self.assertFalse(estimate(_settings(batch=True), rows=99)["batch"])
         self.assertTrue(estimate(_settings(batch=True), rows=100)["batch"])
+
+    def test_batch_threshold_comes_from_the_run_config(self):
+        # config.json may lower batch.min_companies; the estimate must agree with the pipeline.
+        self.assertTrue(estimate(_settings(batch=True), rows=4, batch_min=3)["batch"])
+        self.assertFalse(estimate(_settings(batch=True), rows=2, batch_min=3)["batch"])
+
+    def test_estimate_reports_the_batch_threshold(self):
+        self.assertEqual(estimate(_settings(), 4)["batchMin"], DEFAULT_BATCH_MIN_COMPANIES)
+        self.assertEqual(estimate(_settings(), 4, batch_min=3)["batchMin"], 3)
 
     def test_small_run_is_costed_and_timed_as_direct(self):
         rows = DEFAULT_BATCH_MIN_COMPANIES - 1
@@ -347,3 +356,21 @@ class EstimateRequestTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BatchMinCompaniesTest(unittest.TestCase):
+    def test_reads_batch_min_companies_from_config(self):
+        self.assertEqual(batch_min_companies({"batch": {"min_companies": 3}}), 3)
+
+    def test_default_when_missing_or_not_a_positive_whole_number(self):
+        for config in ({}, {"batch": {}}, {"batch": {"min_companies": 0}}, {"batch": {"min_companies": "x"}},
+                       {"batch": {"min_companies": True}}, {"batch": None}):
+            with self.subTest(config=config):
+                self.assertEqual(batch_min_companies(config), DEFAULT_BATCH_MIN_COMPANIES)
+
+    def test_setup_info_reports_the_threshold(self):
+        self.assertEqual(setup_info({})["batchMinCompanies"], DEFAULT_BATCH_MIN_COMPANIES)
+        self.assertEqual(setup_info({}, batch_min=5)["batchMinCompanies"], 5)
+
+    def test_estimate_request_passes_the_threshold_on(self):
+        self.assertTrue(est.estimate_request({"settings": {"batch": True}, "rows": 4}, batch_min=3)["batch"])

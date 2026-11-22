@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Tuple
 
 from pipeline import models
+from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -192,13 +193,29 @@ def _cost_per_company(provider: str, tier: str) -> Any:
     return estimate(settings, 1)["cost"]
 
 
-def setup_info(env: Mapping[str, str]) -> Dict[str, Any]:
+def batch_min_companies(config: Mapping[str, Any]) -> int:
+    """
+    The fewest companies a run needs before it uses a batch job: the config's
+    batch.min_companies, as pipeline/orchestrator.py reads it, or
+    DEFAULT_BATCH_MIN_COMPANIES when that is missing or not a whole number of
+    at least 1.
+    """
+    batch = config.get("batch") if isinstance(config, Mapping) else None
+    value = batch.get("min_companies") if isinstance(batch, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return DEFAULT_BATCH_MIN_COMPANIES
+    return value
+
+
+def setup_info(env: Mapping[str, str], batch_min: int = DEFAULT_BATCH_MIN_COMPANIES) -> Dict[str, Any]:
     """
     What the browser needs to show the settings form.
 
     Reports whether each API key is set, never its value. Per provider,
     tiers maps each tier to its model and costPerCompany each tier to the
     price of one company at the default settings (None when not priced).
+    batchMinCompanies is batch_min: below it a run classifies directly even
+    with batch mode on.
     """
     providers = [
         {
@@ -215,6 +232,7 @@ def setup_info(env: Mapping[str, str]) -> Dict[str, Any]:
     return {
         "providers": providers,
         "epoKeysSet": bool(env.get("EPO_KEY")) and bool(env.get("EPO_SECRET")),
+        "batchMinCompanies": batch_min,
         "defaults": copy.deepcopy(DEFAULT_SETTINGS),
         "pricedModels": sorted(models.COST_RATES),
     }

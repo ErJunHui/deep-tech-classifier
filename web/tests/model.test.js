@@ -11,7 +11,7 @@ import {
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
-  keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote,
+  keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -985,4 +985,18 @@ test('quickStepNote: patent lookup warns when the EPO keys are missing', () => {
   assert.deepEqual(quickStepNote('epo', { epoKeysSet: false }), { warn: true, text: 'EPO keys missing, so the run continues without patents.' });
   assert.equal(quickStepNote('epo', { epoKeysSet: true }), null);
   assert.equal(quickStepNote('enrichment', { epoKeysSet: false }), null);
+});
+
+/* ---------- batch mode on a run too small to batch (#3) ---------- */
+test('batchSmallRunText: explains that a run under the threshold classifies directly', () => {
+  assert.equal(batchSmallRunText(4, 100), 'Batch jobs start at 100 companies. This run has 4, so it runs directly and this setting changes nothing.');
+  assert.equal(batchSmallRunText(1, 100), 'Batch jobs start at 100 companies. This run has 1, so it runs directly and this setting changes nothing.');
+});
+test('batchSmallRunText: null at or above the threshold, or before any company is ticked', () => {
+  assert.equal(batchSmallRunText(100, 100), null);
+  assert.equal(batchSmallRunText(5000, 100), null);
+  assert.equal(batchSmallRunText(0, 100), null);
+});
+test('batchSmallRunText: formats large thresholds', () => {
+  assert.equal(batchSmallRunText(12, 1500), 'Batch jobs start at 1,500 companies. This run has 12, so it runs directly and this setting changes nothing.');
 });

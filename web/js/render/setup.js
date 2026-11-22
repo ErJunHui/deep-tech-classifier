@@ -11,7 +11,7 @@
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote,
+  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
@@ -43,6 +43,14 @@ const root = () => document.querySelector('.v-workbench');
 export const draftProvider = () => S.setup.providers.find((p) => p.id === S.draft.cfg.provider) || null;
 /* Why batch mode is off for prov (model.noBatchText). */
 export const batchOffText = (prov) => noBatchText(S.setup.providers, prov);
+/* Why batch mode changes nothing for the draft (model.batchSmallRunText), or
+   null. The estimate's batchMin wins over setup's: both come from the server. */
+export function batchSmallText() {
+  const dr = S.draft;
+  if (!dr || !dr.file) return null;
+  const min = (dr.est && dr.est.batchMin) || S.setup.batchMinCompanies || 100;
+  return batchSmallRunText(tickedCount(dr), min);
+}
 
 /* Reads msg out through the live region. */
 export function announce(msg) {
@@ -282,8 +290,9 @@ function settingsPopHtml() {
     '<label class="wb-opt"><input type="radio" name="wb-q" value="' + q.tier + '" data-fk="q-' + q.tier + '"' + (d.tier === q.tier ? ' checked' : '') + '><span class="wb-opt-t">' + q.name + (q.tier === S.setup.defaults.tier ? ' <span class="wb-tag is-auto">Recommended</span>' : '') + tierPriceHtml(prov, q.tier) + '</span><span class="wb-opt-s">' + q.sub + (prov ? ' Uses ' + esc(prov.tiers[q.tier]) + '.' : '') + '</span></label>').join('') + '</div></fieldset>' +
     '<fieldset class="wb-fs"><legend>What to check</legend>' + PLAIN_STEPS.map((s) => {
       const off = s.key === 'batch' && !!prov && !prov.batch;
-      const note = off ? null : quickStepNote(s.key, S.setup);
-      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s' + (note ? ' is-warn' : '') + '">' + esc(off ? batchOffText(prov) : note ? note.text : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
+      const small = !off && s.key === 'batch' ? batchSmallText() : null;
+      const note = off ? null : small ? { warn: false, text: small } : quickStepNote(s.key, S.setup);
+      return '<label class="wb-tg ' + (off ? 'is-disabled' : '') + '"><span class="wb-tg-t">' + s.label + '</span><span class="wb-tg-s' + (note && note.warn ? ' is-warn' : '') + '">' + esc(off ? batchOffText(prov) : note ? note.text : s.sub) + '</span><input type="checkbox" class="wb-switch" data-toggle="' + s.key + '" data-fk="pq-' + s.key + '"' + (d[s.key] && !off ? ' checked' : '') + (off ? ' disabled' : '') + '></label>';
     }).join('') + '</fieldset>' +
     '<div class="wb-pop-foot"><button class="wb-btn wb-btn-ghost wb-btn-sm" data-act="analyst-open" data-fk="analyst-open">Analyst settings…</button><button class="wb-btn wb-btn-sm" data-act="settings-done" data-fk="settings-done">Done</button></div>';
 }

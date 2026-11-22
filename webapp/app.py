@@ -170,7 +170,7 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.get("/api/setup")
     def get_setup() -> Dict[str, Any]:
-        return settings_map.setup_info(os.environ)
+        return settings_map.setup_info(os.environ, settings_map.batch_min_companies(_base_config()))
 
     @app.post("/api/files")
     async def post_file(request: Request) -> Dict[str, Any]:
@@ -191,7 +191,7 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.post("/api/estimate")
     def post_estimate(body: Any = Body(None)) -> Dict[str, Any]:
-        return estimate_request(body)
+        return estimate_request(body, settings_map.batch_min_companies(_base_config()))
 
     # --- runs ---
 

@@ -445,6 +445,14 @@ export function tierPriceText(cost) {
 }
 /* Why batch mode is off for provider prov: the providers that have it, or
    none. providers: GET /api/setup providers[] ({label, batch}). */
+/* Under the Batch mode toggle when the run is too small for a batch job:
+   rows ticked companies, batchMin the server's threshold (GET /api/setup
+   batchMinCompanies, as pipeline/orchestrator.py applies it). Null when
+   batch would apply, or before any company is ticked. */
+export function batchSmallRunText(rows, batchMin) {
+  if (!rows || rows >= batchMin) return null;
+  return 'Batch jobs start at ' + batchMin.toLocaleString('en-US') + ' companies. This run has ' + rows.toLocaleString('en-US') + ', so it runs directly and this setting changes nothing.';
+}
 export function noBatchText(providers, prov) {
   const labels = providers.filter((p) => p.batch).map((p) => p.label);
   if (!labels.length) return 'Batch jobs are not available.';
