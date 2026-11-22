@@ -201,7 +201,7 @@ A run that doesn't batch processes `concurrency.workers` companies at once (8 by
 - [x] Tests: Python (`setup_info` reports workers; `/api/setup` reports a project's `concurrency.workers`) and Node (`directRunText`, `noBatchText`). 173 Python and 153 Node tests pass.
 - [x] Browser check, on a fresh server: `/api/setup` reports `workers: 8`, and the Analyst note reads "claude-haiku-5-5 · up to 8 companies at a time · web searches are usually the largest part of the bill".
 
-Not changed: the time estimate still assumes 8 workers whatever `concurrency.workers` says (README, `concurrency`).
+- [x] Follow-up: the time estimate uses the same count. `estimate()` and `estimate_request()` take `workers`, `/api/estimate` passes `workers_from(base config)`, and the README no longer says the estimate assumes 8. Tests: fewer workers take proportionally longer (EPO excluded), more workers never beat the EPO floor, and `/api/estimate` uses a project's `concurrency.workers`.
 
 ## Next batches (proposed order)
 

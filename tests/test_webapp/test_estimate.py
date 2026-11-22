@@ -14,7 +14,6 @@ from pipeline.llm_provider import get_cost_rates  # noqa: E402
 from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
-from pipeline.parallel import DEFAULT_WORKERS  # noqa: E402
 from webapp.settings_map import batch_min_companies, clean_settings, setup_info  # noqa: E402
 
 
@@ -122,9 +121,15 @@ class EstimateTest(unittest.TestCase):
         self.assertAlmostEqual(alone["secs"], on["secs"])
 
     def test_more_workers_would_not_beat_epo(self):
-        with patch.object(est, "DEFAULT_WORKERS", 1000):
-            e = estimate(_settings(epo=True), 100)
+        e = estimate(_settings(epo=True), 100, workers=1000)
         self.assertGreaterEqual(e["secs"], 100 * est.EPO_SECS)
+
+    def test_fewer_workers_take_longer(self):
+        s = _settings(epo=False, batch=False)
+        eight = estimate(s, 100)
+        two = estimate(s, 100, workers=2)
+        self.assertAlmostEqual(eight["secs"], estimate(s, 100, workers=DEFAULT_WORKERS)["secs"])
+        self.assertAlmostEqual(two["secs"], eight["secs"] * DEFAULT_WORKERS / 2)
 
     def test_enrichment_off_zeroes_its_part(self):
         on = estimate(_settings(enrichment=True), 100)
@@ -376,6 +381,12 @@ class BatchMinCompaniesTest(unittest.TestCase):
     def test_setup_info_reports_the_workers(self):
         self.assertEqual(setup_info({})["workers"], DEFAULT_WORKERS)
         self.assertEqual(setup_info({}, workers=3)["workers"], 3)
+
+    def test_estimate_request_passes_the_workers_on(self):
+        body = {"settings": {"epo": False, "batch": False}, "rows": 100}
+        self.assertAlmostEqual(
+            est.estimate_request(body, workers=2)["secs"], est.estimate_request(body)["secs"] * DEFAULT_WORKERS / 2
+        )
 
     def test_estimate_request_passes_the_threshold_on(self):
         self.assertTrue(est.estimate_request({"settings": {"batch": True}, "rows": 4}, batch_min=3)["batch"])

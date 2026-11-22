@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from tests.test_webapp import fake_classify  # noqa: E402
 from webapp import files  # noqa: E402
 from webapp.app import create_app  # noqa: E402
+from webapp.estimate import estimate_request  # noqa: E402
 from webapp.decisions import CLEAR_NOTE_REQUIRED  # noqa: E402
 
 FAKE = [sys.executable, str(Path(__file__).resolve().parent / "fake_classify.py")]
@@ -183,6 +184,10 @@ class ApiTest(unittest.TestCase):
         client = TestClient(create_app(project, Path(tempfile.mkdtemp(dir=self.tmp)), runner_command=FAKE))
         with client:
             self.assertEqual(client.get("/api/setup").json()["workers"], 3)
+            # The estimate's run time uses the same worker count.
+            body = {"settings": {"epo": False, "batch": False}, "rows": 100}
+            secs = client.post("/api/estimate", json=body).json()["secs"]
+            self.assertAlmostEqual(secs, estimate_request(body, workers=3)["secs"])
 
     # --- runs ---
 

@@ -193,7 +193,8 @@ def create_app(project_root: Path, data_root: Path, runner_command: Optional[Lis
 
     @app.post("/api/estimate")
     def post_estimate(body: Any = Body(None)) -> Dict[str, Any]:
-        return estimate_request(body, settings_map.batch_min_companies(_base_config()))
+        config = _base_config()
+        return estimate_request(body, settings_map.batch_min_companies(config), workers_from(config))
 
     # --- runs ---
 
