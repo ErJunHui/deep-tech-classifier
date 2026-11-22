@@ -30,11 +30,17 @@ export function openAnalyst(from) {
   clearTimeout(closeTimer);
   S.analyst = true;
   ret = from || 'settings';
-  R('overlay').innerHTML = '<div class="wb-scrim" data-act="analyst-close"></div>' +
-    '<section class="wb-sheet" role="dialog" aria-modal="true" aria-labelledby="wb-sh-t">' +
-    '<div class="wb-sh-head"><div class="wb-sh-title"><h2 id="wb-sh-t">Analyst settings</h2><button class="wb-btn wb-btn-sm" data-act="analyst-close" data-fk="sh-close">Done ' + kbd('Esc') + '</button></div>' +
-    '<p class="wb-sh-sub">Everything the pipeline can be tuned with. The defaults suit most runs.</p><div data-r="sh-est"></div></div>' +
-    '<div class="wb-sh-body" data-r="sh-body"></div></section>';
+  const ov = R('overlay');
+  // A sheet still closing is reused, so it turns around from where it is.
+  if (!ov.querySelector('.wb-sheet')) {
+    ov.innerHTML = '<div class="wb-scrim" data-act="analyst-close"></div>' +
+      '<section class="wb-sheet" role="dialog" aria-modal="true" aria-labelledby="wb-sh-t">' +
+      '<div class="wb-sh-head"><div class="wb-sh-title"><h2 id="wb-sh-t">Analyst settings</h2><button class="wb-btn wb-btn-sm" data-act="analyst-close" data-fk="sh-close">Done ' + kbd('Esc') + '</button></div>' +
+      '<p class="wb-sh-sub">Everything the pipeline can be tuned with. The defaults suit most runs.</p><div data-r="sh-est"></div></div>' +
+      '<div class="wb-sh-body" data-r="sh-body"></div></section>';
+    void ov.offsetWidth; // commit the closed state so adding is-open transitions
+  }
+  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.add('is-open'));
   renderAnalyst();
   const f = R('overlay').querySelector('input[name="wb-prov"]:checked') || R('overlay').querySelector('[data-fk="sh-close"]');
   if (f) f.focus();
@@ -46,8 +52,9 @@ export function closeAnalyst(restore) {
   if (!S.analyst) return;
   S.analyst = false;
   const ov = R('overlay');
-  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.add('is-leaving'));
+  ov.querySelectorAll('.wb-scrim, .wb-sheet').forEach((el) => el.classList.remove('is-open'));
   clearTimeout(closeTimer);
+  // After the 160ms close transition (styles.css .wb-sheet).
   closeTimer = setTimeout(() => { if (!S.analyst) ov.innerHTML = ''; }, 170);
   if (restore === false || !setupShown()) return;
   if (ret === 'analyst-open') openSettings();

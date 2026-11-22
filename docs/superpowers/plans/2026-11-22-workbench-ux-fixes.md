@@ -211,9 +211,9 @@ The sheet and its scrim open with the one-shot keyframes `workbench-slide` and `
 
 Rule: the sheet and scrim use transitions toward an `is-open` class. Opening adds the class one frame after the elements are inserted. Closing removes it. Reopening while a close is still running reuses the leaving elements: it cancels the timer and adds `is-open` again, so the sheet turns around from where it is. Durations stay the same: 240ms to open and 160ms to close for the sheet, 200ms and 160ms for the scrim. Under reduced motion the global rule keeps only `opacity`, so the sheet fades without moving.
 
-- [ ] **Step 1:** In `styles.css`, give `.wb-sheet` and `.wb-scrim` their closed state (opacity 0, the sheet at `translateX(16px)`) and their `transition`, with the open state under `.is-open`. Remove `.is-leaving`, along with `workbench-slide`, `workbench-slide-out` and their reduced-motion copies once nothing uses them.
-- [ ] **Step 2:** In `analyst.js`, `openAnalyst` reuses a leaving sheet or inserts a new one and adds `is-open` after a forced reflow. `closeAnalyst` removes `is-open` and empties the overlay after the close transition.
-- [ ] **Step 3:** Run the tests. In the browser: opening slides in. Clicking Done halfway through the open slides back from the current position with no jump. Reopening during the close turns the sheet around without rebuilding it, and focus and the body content are still right. With reduced motion emulated, only opacity changes.
+- [x] **Step 1:** In `styles.css`, give `.wb-sheet` and `.wb-scrim` their closed state (opacity 0, the sheet at `translateX(16px)`) and their `transition`, with the open state under `.is-open`. Remove `.is-leaving`, along with `workbench-slide`, `workbench-slide-out` and their reduced-motion copies once nothing uses them.
+- [x] **Step 2:** In `analyst.js`, `openAnalyst` reuses a leaving sheet or inserts a new one and adds `is-open` after a forced reflow. `closeAnalyst` removes `is-open` and empties the overlay after the close transition.
+- [x] **Step 3:** Run the tests. In the browser: opening slides in. Clicking Done halfway through the open slides back from the current position with no jump. Reopening during the close turns the sheet around without rebuilding it, and focus and the body content are still right. With reduced motion emulated, only opacity changes.
 
 ## Task 19: "Same settings…" offers the same file first
 
