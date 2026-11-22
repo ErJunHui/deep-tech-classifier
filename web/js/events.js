@@ -7,7 +7,7 @@
    analyst sheet, Start). The command menu, shortcuts sheet, reading view,
    divider, filter shortcuts and download are in commands.js. */
 import { S, renderDetail, stopActive, resumeActive } from './state.js';
-import { openSetup, cancelSetup, showRun, setupChanged, loadFile, clearFile, startRun } from './setup.js';
+import { openSetup, cancelSetup, parkSetup, showRun, setupChanged, loadFile, clearFile, startRun } from './setup.js';
 import { setupShown } from './store.js';
 import { record, restore, undo } from './decisions.js';
 import {
@@ -15,7 +15,7 @@ import {
   openHelp, openPalette, paletteQuery, runPalette, closeModal, modalKey, saveUi,
   onDividerDown, onDividerMove, onDividerUp, onDividerDblClick, dividerKey,
 } from './commands.js';
-import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW } from './model.js';
+import { clamp, newFilters, rowView, formProblem, formKey, changeChoice, editChoice, settingValue, SETUP_FIELDS, ROW_WINDOW, setupEscapeAction } from './model.js';
 import { R } from './render/util.js';
 import { renderChips } from './render/chips.js';
 import { renderTable, rowBtn } from './render/table.js';
@@ -327,9 +327,12 @@ function popKey(e) {
   e.preventDefault();
   opts[i].focus();
 }
-/* Esc while setting up: closes the open popover, else cancels the new run. */
+/* Esc while setting up: closes the open popover; else discards an empty
+   draft and parks one with a file (model.setupEscapeAction). */
 function setupEscape() {
-  if (popKind()) closePop(true); else cancelSetup();
+  if (popKind()) { closePop(true); return; }
+  const act = setupEscapeAction(S.draft);
+  if (act === 'discard') cancelSetup(); else if (act === 'park') parkSetup();
 }
 
 /* Keys that belong to a focused field, an overlay, the setup or the divider. */

@@ -92,6 +92,19 @@ export function cancelSetup(restoreFocus) {
   if (b) b.focus();
 }
 
+/* Esc with a file loaded: leaves setup but keeps the draft parked in the
+   rail ("+ New run", O or its rail item returns to it), so a stray key
+   never throws away an upload and its mapping. Focus as in cancelSetup. */
+export function parkSetup() {
+  if (!S.draft || S.draft.starting) return;
+  hideSetup();
+  renderAll();
+  toast('New run kept', 'Press O or pick it in the sidebar to return.');
+  const ret = setupRet && document.querySelector('[data-fk="' + setupRet + '"]');
+  const b = ret || (S.active && document.querySelector('[data-fk="rail-' + S.active.run.id + '"]'));
+  if (b) b.focus();
+}
+
 /* After the draft changed: re-renders what shows it and asks for a new
    estimate. opts.table: the table too (mapping, ticks). opts.fields false:
    only the numbers, while a field of the sheet is being typed in. */

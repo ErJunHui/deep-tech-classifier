@@ -11,7 +11,7 @@
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
   classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
-  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText,
+  modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
 import { R, put, kbd } from './util.js';
@@ -197,7 +197,7 @@ export function renderSetupBar() {
   const why = prob || dr.startError;
   put(R('setbar'), '<div class="wb-setbar-top"><button class="wb-btn wb-btn-sm wb-set" data-act="settings-pop" data-fk="settings" aria-haspopup="dialog" aria-expanded="' + open + '">Settings: <b>' + esc(qualityName(d.tier)) + (isCustom(d, S.setup.defaults) ? ', customised' : '') + '</b> <span aria-hidden="true">▾</span></button>' +
     '<span class="wb-setbar-meta">' + (prov ? esc(prov.label) + ' · ' : '') + '<span class="wb-mono">' + esc(modelFor(d, S.setup)) + '</span></span></div>' +
-    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup"' + (dr.starting ? ' aria-disabled="true"' : '') + '>Cancel ' + kbd('Esc') + '</button>' +
+    '<div class="wb-setbar-row"><button class="wb-btn wb-btn-ghost" data-act="cancel-setup" data-fk="cancel-setup"' + (dr.starting ? ' aria-disabled="true"' : '') + '>Cancel' + (cancelHintsEsc(dr) ? ' ' + kbd('Esc') : '') + '</button>' +
     '<button class="wb-btn wb-btn-primary wb-go" data-act="start" data-fk="start"' + (prob || dr.starting ? ' aria-disabled="true"' : '') + (dr.starting ? ' aria-busy="true"' : '') + (why ? ' aria-describedby="wb-setbar-why"' : '') + '>' + esc(label) + '</button></div>' + note);
 }
 

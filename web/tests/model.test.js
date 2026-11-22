@@ -11,6 +11,7 @@ import {
   modelFor, isCustom, settingValue, pinUnpriced, SETUP_FIELDS, draftRailLine,
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
+  keptSelection, setupEscapeAction, cancelHintsEsc,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -906,4 +907,36 @@ test('startRequest: the exclude list sent and its count, unchanged by later tick
   d2.excluded.add(2); // ticked out while the request is in flight
   assert.deepEqual(r2, { exclude: [0], n: 1 });
   assert.deepEqual(startRequest(named([])), { exclude: [], n: 2 });
+});
+
+/* ---------- selection after a filter change ---------- */
+test('keptSelection: a row still in view stays selected', () => {
+  assert.equal(keptSelection(2, [3, 2, 4]), 2);
+  assert.equal(keptSelection(0, [0]), 0);
+});
+test('keptSelection: a row the filters hide gives way to the first visible row', () => {
+  assert.equal(keptSelection(1, [2]), 2);
+  assert.equal(keptSelection(null, [4, 1]), 4);
+});
+test('keptSelection: an empty view selects nothing', () => {
+  assert.equal(keptSelection(1, []), null);
+  assert.equal(keptSelection(null, []), null);
+});
+
+/* ---------- Esc while setting up a new run ---------- */
+const draftWith = (o) => Object.assign({ file: null, reading: '', starting: false }, o);
+test('setupEscapeAction: an empty draft is discarded; there is nothing to lose', () => {
+  assert.equal(setupEscapeAction(draftWith({})), 'discard');
+});
+test('setupEscapeAction: a draft with a file, or one still uploading, is parked', () => {
+  assert.equal(setupEscapeAction(draftWith({ file: { name: 'a.xlsx' } })), 'park');
+  assert.equal(setupEscapeAction(draftWith({ reading: 'a.xlsx' })), 'park');
+});
+test('setupEscapeAction: nothing while Start is in flight or without a draft', () => {
+  assert.equal(setupEscapeAction(draftWith({ file: { name: 'a.xlsx' }, starting: true })), 'none');
+  assert.equal(setupEscapeAction(null), 'none');
+});
+test('cancelHintsEsc: the Cancel button shows Esc only when Esc would also discard', () => {
+  assert.equal(cancelHintsEsc(draftWith({})), true);
+  assert.equal(cancelHintsEsc(draftWith({ file: { name: 'a.xlsx' } })), false);
 });

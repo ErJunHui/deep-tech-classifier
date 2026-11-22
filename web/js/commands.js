@@ -9,8 +9,8 @@
    model.js, the modal HTML in render/modal.js. events.js binds these and
    registers the row actions it owns (registerActions). */
 import * as api from './api.js';
-import { clamp, counts, dateLabel, paletteItems, downloadToast, panelWidth, parseUi, uiToStore } from './model.js';
-import { S, refreshView, stopActive, resumeActive, resumable } from './state.js';
+import { clamp, counts, dateLabel, paletteItems, downloadToast, panelWidth, parseUi, uiToStore, keptSelection } from './model.js';
+import { S, refreshView, renderDetail, stopActive, resumeActive, resumable } from './state.js';
 import { openSetup, showRun } from './setup.js';
 import { setupShown } from './store.js';
 import { undo } from './decisions.js';
@@ -51,7 +51,7 @@ export const CMDS = [
   { g: 'View', l: 'Resize the panel (divider focused)', k: ['↑', '↓', '[', ']'], menu: false },
   { g: 'View', l: 'Reset the panel width', k: ['Double-click'], menu: false },
   { g: 'Run', l: 'New run: set it up in the table', k: ['O'], act: 'new-run', setup: true },
-  { g: 'Run', l: 'Cancel the new run (or close its menu)', k: ['Esc'], menu: false, setup: true },
+  { g: 'Run', l: 'Leave the new run setup (or close its menu)', k: ['Esc'], menu: false, setup: true },
   { g: 'Run', l: 'Download Excel', k: ['D'], act: 'download' },
   { g: 'Run', l: 'Stop or resume the active run', k: ['S'], act: 'stop-resume' },
 ];
@@ -142,9 +142,16 @@ export function modalKey(e) {
 }
 
 /* ---------- filters and the run ---------- */
+/* After the user changed filters, search or sort. A selected row the view
+   now hides gives way to the first visible one (model.keptSelection), so
+   the evidence panel never shows a company the table does not. */
 export function refreshFilters() {
   refreshView(true);
+  const sel = S.active ? keptSelection(S.selected, S.viewIds) : S.selected;
+  const moved = sel !== S.selected;
+  S.selected = sel;
   renderStrip(); renderChips(); renderTable();
+  if (moved) renderDetail({ reset: true });
 }
 export function toggleNeeds() {
   if (!S.active) return;

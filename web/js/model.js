@@ -582,3 +582,23 @@ export function parseUi(raw) {
 }
 /* The fields of state s that are stored under 'dtc.ui'. */
 export const uiToStore = (s) => ({ detailW: s.detailW, reading: s.reading, collapsed: s.collapsed });
+
+/* The row to select after the user changed filters, search or sort:
+   selected while it is still among ids (the view), else the first visible
+   row, or null when nothing is visible. */
+export function keptSelection(selected, ids) {
+  if (selected != null && ids.indexOf(selected) >= 0) return selected;
+  return ids.length ? ids[0] : null;
+}
+
+/* What Esc does to the new run's draft once no popover is open: 'none'
+   while Start is in flight (or without a draft), 'discard' when no file is
+   loaded or uploading (nothing to lose), else 'park' (kept in the rail). */
+export function setupEscapeAction(draft) {
+  if (!draft || draft.starting) return 'none';
+  return draft.file || draft.reading ? 'park' : 'discard';
+}
+/* Whether the Cancel button shows the Esc hint: only when Esc discards too. */
+export function cancelHintsEsc(draft) {
+  return setupEscapeAction(draft) === 'discard';
+}
