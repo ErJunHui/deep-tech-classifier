@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 from pipeline import models  # noqa: E402
 from pipeline import llm_provider  # noqa: E402
 from pipeline.llm_provider import get_cost_rates  # noqa: E402
+from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS  # noqa: E402
 from webapp import estimate as est  # noqa: E402
 from webapp.estimate import estimate  # noqa: E402
 from webapp.settings_map import clean_settings, setup_info  # noqa: E402
@@ -19,11 +20,24 @@ from webapp.settings_map import clean_settings, setup_info  # noqa: E402
 def _settings(**overrides) -> dict:
     base = {
         "provider": "anthropic", "tier": "fast", "model": "",
-        "enrichment": True, "validator": True, "batch": False,
+        "enrichment": True, "epo": False, "validator": True, "batch": False,
         "validatorThreshold": 70, "maxWebSearches": 3, "enrichmentMaxSearches": 2,
     }
     base.update(overrides)
     return clean_settings(base)
+
+
+# Duration parts at the _settings defaults (threshold 70, so share is VALIDATED_SHARE_AT_70).
+def _enrich_secs(rows: int) -> float:
+    return rows * est.ENRICH_SECS / DEFAULT_WORKERS
+
+
+def _direct_classify_secs(rows: int) -> float:
+    return rows * est.CLASSIFY_DIRECT_SECS / DEFAULT_WORKERS
+
+
+def _validate_secs(rows: int) -> float:
+    return rows * est.VALIDATED_SHARE_AT_70 * est.VALIDATE_SECS / DEFAULT_WORKERS
 
 
 class EstimateTest(unittest.TestCase):
@@ -41,7 +55,9 @@ class EstimateTest(unittest.TestCase):
         )
         self.assertEqual(e["model"], models.CANDIDATES["anthropic"]["balanced"][0])
         self.assertAlmostEqual(e["cost"], sum(e["parts"].values()))
-        self.assertEqual(e["secs"], 10 * est.SECONDS_PER_COMPANY["sequential"])
+        self.assertAlmostEqual(
+            e["secs"], _enrich_secs(10) + _direct_classify_secs(10) + _validate_secs(10)
+        )
 
     def test_classifier_part_uses_the_models_rates(self):
         e = estimate(_settings(), 100)
@@ -68,7 +84,37 @@ class EstimateTest(unittest.TestCase):
         self.assertAlmostEqual(batch["parts"]["classify"], plain["parts"]["classify"] * 0.5)
         self.assertAlmostEqual(batch["parts"]["enrich"], plain["parts"]["enrich"])
         self.assertAlmostEqual(batch["parts"]["validate"], plain["parts"]["validate"])
-        self.assertEqual(batch["secs"], 100 * est.SECONDS_PER_COMPANY["batch"])
+        self.assertAlmostEqual(
+            batch["secs"], _enrich_secs(100) + est.BATCH_OVERHEAD_SECS + _validate_secs(100)
+        )
+
+    def test_small_run_is_not_estimated_as_a_batch(self):
+        self.assertFalse(estimate(_settings(batch=True), rows=99)["batch"])
+        self.assertTrue(estimate(_settings(batch=True), rows=100)["batch"])
+
+    def test_small_run_is_costed_and_timed_as_direct(self):
+        rows = DEFAULT_BATCH_MIN_COMPANIES - 1
+        plain = estimate(_settings(batch=False), rows)
+        batch = estimate(_settings(batch=True), rows)
+        self.assertAlmostEqual(batch["parts"]["classify"], plain["parts"]["classify"])
+        self.assertAlmostEqual(batch["secs"], plain["secs"])
+
+    def test_epo_sets_the_floor_for_large_runs(self):
+        self.assertGreaterEqual(estimate(_settings(epo=True), rows=5000)["secs"], 5000 * 17)
+
+    def test_epo_and_enrichment_overlap(self):
+        # Patent lookups and enrichment run side by side; the slower one sets the time.
+        on = estimate(_settings(epo=True), 100)
+        self.assertAlmostEqual(
+            on["secs"], 100 * est.EPO_SECS + _direct_classify_secs(100) + _validate_secs(100)
+        )
+        alone = estimate(_settings(epo=True, enrichment=False), 100)
+        self.assertAlmostEqual(alone["secs"], on["secs"])
+
+    def test_more_workers_would_not_beat_epo(self):
+        with patch.object(est, "DEFAULT_WORKERS", 1000):
+            e = estimate(_settings(epo=True), 100)
+        self.assertGreaterEqual(e["secs"], 100 * est.EPO_SECS)
 
     def test_enrichment_off_zeroes_its_part(self):
         on = estimate(_settings(enrichment=True), 100)
@@ -76,14 +122,19 @@ class EstimateTest(unittest.TestCase):
         self.assertGreater(on["parts"]["enrich"], 0)
         self.assertEqual(off["parts"]["enrich"], 0)
         self.assertAlmostEqual(off["parts"]["classify"], on["parts"]["classify"])
-        self.assertAlmostEqual(off["secs"], on["secs"] * 0.75)
+        self.assertAlmostEqual(off["secs"], on["secs"] - _enrich_secs(100))
 
     def test_validation_off_zeroes_its_part(self):
         on = estimate(_settings(validator=True), 100)
         off = estimate(_settings(validator=False), 100)
         self.assertGreater(on["parts"]["validate"], 0)
         self.assertEqual(off["parts"]["validate"], 0)
-        self.assertAlmostEqual(off["secs"], on["secs"] * 0.85)
+        self.assertAlmostEqual(off["secs"], on["secs"] - _validate_secs(100))
+
+    def test_validation_time_follows_the_validated_share(self):
+        low = estimate(_settings(validatorThreshold=35), 100)
+        mid = estimate(_settings(validatorThreshold=70), 100)
+        self.assertAlmostEqual(mid["secs"] - low["secs"], _validate_secs(100) / 2)
 
     def test_higher_threshold_raises_validation_part(self):
         low = estimate(_settings(validatorThreshold=35), 100)
@@ -109,7 +160,7 @@ class EstimateTest(unittest.TestCase):
         self.assertEqual(e["model"], "my-finetune")
         self.assertFalse(e["known"])
         self.assertIsNone(e["cost"])
-        self.assertEqual(e["secs"], 100 * est.SECONDS_PER_COMPANY["sequential"])
+        self.assertAlmostEqual(e["secs"], estimate(_settings(), 100)["secs"])
 
     def test_priced_pinned_model_is_used(self):
         pinned = models.CANDIDATES["anthropic"]["best"][0]
@@ -121,7 +172,9 @@ class EstimateTest(unittest.TestCase):
         for provider in ("gemini", "openai"):
             e = estimate(_settings(provider=provider, batch=True), 100)
             self.assertFalse(e["batch"], provider)
-            self.assertEqual(e["secs"], 100 * est.SECONDS_PER_COMPANY["sequential"])
+            self.assertAlmostEqual(
+                e["secs"], _enrich_secs(100) + _direct_classify_secs(100) + _validate_secs(100)
+            )
 
     def test_validate_part_counts_share_tokens_and_search_fees(self):
         e = estimate(_settings(validatorThreshold=70, maxWebSearches=3, enrichmentMaxSearches=1), 100)
@@ -159,7 +212,7 @@ class EstimateTest(unittest.TestCase):
 
     def test_batch_agrees_with_setup_info_for_every_provider(self):
         for p in setup_info({})["providers"]:
-            e = estimate(_settings(provider=p["id"], batch=True), 10)
+            e = estimate(_settings(provider=p["id"], batch=True), DEFAULT_BATCH_MIN_COMPANIES)
             self.assertEqual(e["batch"], p["batch"], p["id"])
 
     def test_negative_rows_count_as_zero(self):

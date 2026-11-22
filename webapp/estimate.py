@@ -2,8 +2,14 @@
 A rough cost and duration estimate for a run, shown before it starts.
 
 Prices come from pipeline/models.py through get_cost_rates. The token counts
-and timings below are ASSUMPTIONS, not measurements: recalibrate them from the
-token columns in the Full Detail sheet of a real run.
+are ASSUMPTIONS, not measurements: recalibrate them from the token columns in
+the Full Detail sheet of a real run.
+
+Timings: ENRICH_SECS, VALIDATE_SECS, EPO_SECS and BATCH_OVERHEAD_SECS were
+measured (BATCH_OVERHEAD_SECS once, on a 4-request batch); CLASSIFY_DIRECT_SECS
+is an assumption. Per-company LLM steps run on DEFAULT_WORKERS workers; EPO
+lookups are capped by EPO's search quota whatever the worker count, so they
+set the floor for large runs.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from typing import Any, Dict, Tuple
 
 from pipeline import models
 from pipeline.llm_provider import BATCH_DISCOUNT, cost_known, get_cost_rates
+from pipeline.parallel import DEFAULT_BATCH_MIN_COMPANIES, DEFAULT_WORKERS
 from webapp.settings_map import BATCH_PROVIDERS, clean_settings
 
 # Assumptions, to be recalibrated from a real run's Full Detail token columns.
@@ -20,11 +27,13 @@ CLASSIFIER_TOKENS = (3000, 600)        # input, output per company
 ENRICH_TOKENS_PER_SEARCH = (4000, 300) # per company, per allowed search
 VALIDATOR_TOKENS_PER_SEARCH = (5000, 400)
 VALIDATED_SHARE_AT_70 = 0.25           # share of companies validated at threshold 70; scales linearly with the threshold, capped at 1.0
-SECONDS_PER_COMPANY = {"sequential": 18, "batch": 6}
 
-# Duration multipliers when a step is switched off.
-_NO_ENRICHMENT_TIME = 0.75
-_NO_VALIDATION_TIME = 0.85
+# Seconds per company for one worker, except BATCH_OVERHEAD_SECS (per run).
+ENRICH_SECS = 7            # measured, run_20261116_213044
+VALIDATE_SECS = 21         # measured
+CLASSIFY_DIRECT_SECS = 20  # assumption, not yet measured
+EPO_SECS = 17              # measured at EPO's 5-searches-per-minute limit
+BATCH_OVERHEAD_SECS = 360  # measured once, for 4 requests
 
 
 def _token_cost(tokens: Tuple[int, int], rates: Dict[str, Any]) -> float:
@@ -60,9 +69,10 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
             models.ESTIMATE_PRICE_AS), else None. A pinned model is never
             mapped: a pin names an exact model.
         pinned: True when `model` came from the pin.
-        batch: True when the run would use a batch job.
+        batch: True when the run would use a batch job: batching is on, the
+            provider supports it and rows is at least DEFAULT_BATCH_MIN_COMPANIES.
         cost: Sum of parts, or None when not known.
-        secs: Estimated duration.
+        secs: Estimated duration, with DEFAULT_WORKERS workers.
         parts: USD per run for classify, enrich and validate.
     """
     rows = max(int(rows), 0)
@@ -77,7 +87,11 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         priced_as = models.ESTIMATE_PRICE_AS[model]
         rates = get_cost_rates(priced_as, warn=False)
     known = cost_known(rates)
-    batch = bool(settings["batch"]) and provider in BATCH_PROVIDERS
+    batch = (
+        bool(settings["batch"])
+        and provider in BATCH_PROVIDERS
+        and rows >= DEFAULT_BATCH_MIN_COMPANIES
+    )
 
     classify = rows * _token_cost(CLASSIFIER_TOKENS, rates)
     if batch:
@@ -90,17 +104,21 @@ def estimate(settings: Dict[str, Any], rows: int) -> Dict[str, Any]:
         )
 
     validate = 0.0
+    share = min(VALIDATED_SHARE_AT_70 * settings["validatorThreshold"] / 70, 1.0)
     if settings["validator"]:
-        share = min(VALIDATED_SHARE_AT_70 * settings["validatorThreshold"] / 70, 1.0)
         validate = rows * share * _search_step_cost(
             VALIDATOR_TOKENS_PER_SEARCH, settings["maxWebSearches"], rates
         )
 
-    secs = float(rows * SECONDS_PER_COMPANY["batch" if batch else "sequential"])
-    if not settings["enrichment"]:
-        secs *= _NO_ENRICHMENT_TIME
-    if not settings["validator"]:
-        secs *= _NO_VALIDATION_TIME
+    # Patent lookups and enrichment run side by side; the slower one sets the time.
+    workers = DEFAULT_WORKERS
+    gather_secs = max(
+        rows * EPO_SECS if settings["epo"] else 0,
+        rows * ENRICH_SECS / workers if settings["enrichment"] else 0,
+    )
+    classify_secs = BATCH_OVERHEAD_SECS if batch else rows * CLASSIFY_DIRECT_SECS / workers
+    validate_secs = rows * share * VALIDATE_SECS / workers if settings["validator"] else 0
+    secs = float(gather_secs + classify_secs + validate_secs)
 
     parts = {"classify": classify, "enrich": enrich, "validate": validate}
     return {

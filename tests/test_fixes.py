@@ -96,6 +96,35 @@ class EpoBridgeTests(unittest.TestCase):
         self.assertEqual(result.raw_status, "EPO Import Error")
         self.assertIn(missing, logs.output[0])
 
+    def test_no_fixed_delays_are_configured(self):
+        api = epo_bridge._build_epo_config("k", "s", "/pkg")["api"]
+        self.assertEqual((api["search_delay_seconds"], api["detail_delay_seconds"]), (0, 0))
+
+    def test_client_is_built_once_and_lookup_does_not_sleep(self):
+        fake_client_class = mock.MagicMock(name="EPOClient")
+        search = mock.MagicMock(return_value=("No Results Found", "", "0", []))
+        fake_modules = {
+            "core.api_client": SimpleNamespace(EPOClient=fake_client_class),
+            "processors.company_processor": SimpleNamespace(
+                clean_company_name_for_epo=lambda name: name,
+                search_and_process_company=search,
+            ),
+            "utils.namespaces": SimpleNamespace(BIBLIO_NAMESPACES={}),
+            "utils.country_codes": SimpleNamespace(COUNTRY_CODE_MAP={}),
+            "processors.deeptech_classifier": SimpleNamespace(DeepTechClassifier=mock.MagicMock()),
+        }
+        with tempfile.TemporaryDirectory() as pkg_dir, \
+                mock.patch.dict(sys.modules, fake_modules), \
+                mock.patch.object(sys, "path", list(sys.path)), \
+                mock.patch.object(epo_bridge, "_EPO_RUNTIMES", {}), \
+                mock.patch("time.sleep") as sleep:
+            first = epo_bridge.run_epo_lookup("A", "k", "s", pkg_dir)
+            second = epo_bridge.run_epo_lookup("B", "k", "s", pkg_dir)
+        self.assertEqual((first.raw_status, second.raw_status), ("No Results Found",) * 2)
+        self.assertEqual(fake_client_class.call_count, 1)
+        self.assertEqual([c.kwargs["original_name"] for c in search.call_args_list], ["A", "B"])
+        sleep.assert_not_called()
+
 
 class CostTests(unittest.TestCase):
     def test_haiku_45_rates(self):

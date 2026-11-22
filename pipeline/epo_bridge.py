@@ -9,9 +9,9 @@ import os
 import re
 import sys
 import logging
-import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,9 @@ def _build_epo_config(epo_key: str, epo_secret: str, epo_package_dir: str) -> Di
             "epo_key": epo_key,
             "epo_secret": epo_secret,
             "max_results_per_company": 10,
-            "search_delay_seconds": 4,
-            "detail_delay_seconds": 2,
+            # No fixed delays: the epo_ops client's Throttler already waits before each request.
+            "search_delay_seconds": 0,
+            "detail_delay_seconds": 0,
             "timeout": 60,
             "throttle_by_header": True,
         },
@@ -106,6 +107,51 @@ def _build_epo_config(epo_key: str, epo_secret: str, epo_package_dir: str) -> Di
     }
 
 
+# While companies are gathered with more than one worker (in either pipeline), every
+# EPO request goes through this one thread, so the EPO client's own throttler sees one
+# caller. With one worker the lookup runs on the calling thread and this thread is
+# never started (it starts on the first lookup in the lane).
+_EPO_LANE = ThreadPoolExecutor(max_workers=1, thread_name_prefix="epo")
+
+
+def lookup_in_lane(*args, **kwargs) -> "EPOResult":
+    """
+    run_epo_lookup(*args, **kwargs), run on the EPO thread; waits for the result.
+
+    After an error or Ctrl-C, workers already waiting on the lane still wait for
+    their lookups, so stopping can take up to about one throttled EPO lookup per
+    worker. A second Ctrl-C leaves them to finish in the background.
+    """
+    return _EPO_LANE.submit(run_epo_lookup, *args, **kwargs).result()
+
+
+# (epo_key, epo_package_dir) -> (EPOClient, DeepTechClassifier, config dict), built once
+# per run. Within a run every EPO lookup happens on one thread (the lane thread above with
+# more than one worker, otherwise the calling thread), so this cache needs no lock.
+_EPO_RUNTIMES: Dict[Tuple[str, str], Tuple[Any, Any, Dict[str, Any]]] = {}
+
+
+def _epo_runtime(epo_key: str, epo_secret: str, epo_package_dir: str) -> Tuple[Any, Any, Dict[str, Any]]:
+    """
+    The EPO client, deep-tech classifier and config for these credentials, built once
+    and reused so each company does not log in again. The epo_ops client renews its
+    access token itself when it expires.
+    """
+    key = (epo_key, epo_package_dir)
+    if key not in _EPO_RUNTIMES:
+        from core.api_client import EPOClient  # type: ignore
+        from processors.deeptech_classifier import DeepTechClassifier  # type: ignore
+
+        epo_config = _build_epo_config(epo_key, epo_secret, epo_package_dir)
+        mapping_file = os.path.join(epo_package_dir, "config", "deeptech_mapping.json")
+        _EPO_RUNTIMES[key] = (
+            EPOClient(epo_config),
+            DeepTechClassifier(mapping_file, epo_config["deeptech"]),
+            epo_config,
+        )
+    return _EPO_RUNTIMES[key]
+
+
 def run_epo_lookup(
     company_name: str,
     epo_key: Optional[str],
@@ -154,12 +200,8 @@ def run_epo_lookup(
         return EPOResult(raw_status="EPO Import Error")
 
     try:
-        epo_config = _build_epo_config(epo_key, epo_secret, epo_package_dir)
-        epo_client = EPOClient(epo_config)
+        epo_client, deeptech_classifier, epo_config = _epo_runtime(epo_key, epo_secret, epo_package_dir)
         cleaned_name = clean_company_name_for_epo(company_name)
-
-        mapping_file = os.path.join(epo_package_dir, "config", "deeptech_mapping.json")
-        deeptech_classifier = DeepTechClassifier(mapping_file, epo_config["deeptech"])
 
         logger.info(f"EPO lookup for '{company_name}' (cleaned: '{cleaned_name}')")
 
@@ -175,9 +217,6 @@ def run_epo_lookup(
             deeptech_classifier=deeptech_classifier,
             config=epo_config,
         )
-
-        # Small delay to respect EPO rate limits
-        time.sleep(epo_config["api"]["search_delay_seconds"])
 
         result = _build_result_from_details(patent_details, final_status)
         result = _check_domain_coherence(result, description, domain)

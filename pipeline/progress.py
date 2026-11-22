@@ -9,12 +9,16 @@ be able to break a run.
 import json
 import logging
 import os
+import threading
 from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "DTC_PROGRESS_FILE"
+
+# Worker threads emit concurrently; one writer at a time keeps each line whole.
+_write_lock = threading.Lock()
 
 
 def emit(
@@ -35,9 +39,10 @@ def emit(
             "phase": phase,
             "at": datetime.now().isoformat(),
         }, ensure_ascii=False)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-            f.flush()
+        with _write_lock:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+                f.flush()
     except Exception as exc:
         try:
             logger.debug(f"Progress event not written: {exc}")

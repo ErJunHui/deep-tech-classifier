@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -85,6 +86,8 @@ class LLMProvider(ABC):
     reported_model: Optional[str] = None
     # (first, later) when a later response reported a different model.
     model_drift: Optional[Tuple[str, str]] = None
+    # Worker threads report models concurrently; guards the first/drift check.
+    _note_lock = threading.Lock()
 
     @property
     def search_model_name(self) -> Optional[str]:
@@ -95,10 +98,11 @@ class LLMProvider(ABC):
         """Record the model a response reported; flag it if it differs from the first."""
         if not reported:
             return
-        if self.reported_model is None:
-            self.reported_model = reported
-        elif reported != self.reported_model and self.model_drift is None:
-            self.model_drift = (self.reported_model, reported)
+        with self._note_lock:
+            if self.reported_model is None:
+                self.reported_model = reported
+            elif reported != self.reported_model and self.model_drift is None:
+                self.model_drift = (self.reported_model, reported)
 
     def list_model_ids(self) -> List[str]:
         """Model IDs the provider currently serves."""
