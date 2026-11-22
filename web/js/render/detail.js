@@ -154,7 +154,7 @@ function sec(key, title, aside, body) {
 function docHtml(run, v) {
   const r = v.r;
   return '<div class="wb-doc">' + (v.reclassified ? reclassHtml(v) : flagHtml(run, v)) +
-    sec('reasoning', 'Reasoning', v.reclassified ? 'Pipeline’s, supports ' + vLow(r.verdict) : '', '<p class="wb-lead">' + esc(r.reasoning) + '</p>') +
+    sec('reasoning', 'Reasoning', v.reclassified ? 'Pipeline’s, supports ' + vLow(r.verdict) : '', '<p class="wb-body">' + esc(r.reasoning) + '</p>') +
     criteriaHtml(r) + evidenceHtml(v.row, r) + patentsHtml(r) + validatorHtml(run, r) + buildHtml(run, r, v) + historyHtml(run, v) +
     metaHtml(run, r) + '</div>';
 }

@@ -12,6 +12,7 @@ import {
   durText, countOf, fileLine, noBatchText, tierPriceText, startRequest,
   paletteItems, exportName, downloadToast, PANEL_MIN_W, panelWidth, parseUi, uiToStore,
   keptSelection, setupEscapeAction, cancelHintsEsc, formHint, missingKeyText, setupRowStatus, quickStepNote, batchSmallRunText,
+  extraColumnsShort, paletteHeading,
 } from '../js/model.js';
 
 /* ---------- fixtures in the Row shape ---------- */
@@ -700,6 +701,12 @@ test('extraColumns: headers no field reads, in file order', () => {
   assert.deepEqual(extraColumns(['Company', 'About', 'City', 'Funding'], { company_name: 'Company', description: 'About', uen: '' }), ['City', 'Funding']);
   assert.deepEqual(extraColumns(['A'], { company_name: 'A' }), []);
 });
+test('extraColumnsShort: up to max names, then a count of the rest', () => {
+  assert.deepEqual(extraColumnsShort(['A', 'B'], 3), { shown: ['A', 'B'], more: 0 });
+  assert.deepEqual(extraColumnsShort(['A', 'B', 'C', 'D'], 3), { shown: ['A', 'B', 'C', 'D'], more: 0 });
+  assert.deepEqual(extraColumnsShort(['A', 'B', 'C', 'D', 'E'], 3), { shown: ['A', 'B', 'C'], more: 2 });
+  assert.deepEqual(extraColumnsShort([], 3), { shown: [], more: 0 });
+});
 test('noDescriptionNote: wording depends on enrichment; empty when a description is mapped', () => {
   assert.equal(noDescriptionNote({ mapping: { description: 'About' }, enrichment: true, lowEvidenceCap: 60 }), '');
   assert.equal(noDescriptionNote({ mapping: {}, enrichment: true, lowEvidenceCap: 60 }), 'No description column: classification will rely on web enrichment.');
@@ -782,6 +789,10 @@ test('paletteItems: while setting up, only setup actions and the runs; no run is
     ['Run', 'pilot.xlsx'], ['Run', 'companies.xlsx'],
   ]);
   assert.ok(items.every((it) => !it.keys.includes('current')));
+});
+test('paletteHeading: a plural heading where a group starts, null inside a group', () => {
+  const items = [{ g: 'Action' }, { g: 'Action' }, { g: 'Run' }, { g: 'Company' }, { g: 'Company' }];
+  assert.deepEqual(items.map((it, i) => paletteHeading(items, i)), ['Actions', null, 'Runs', 'Companies', null]);
 });
 test('paletteItems: no open run lists no companies', () => {
   assert.equal(paletteItems('', palCtx({ rows: null, activeId: null })).filter((it) => it.g === 'Company').length, 0);

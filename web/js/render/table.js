@@ -19,7 +19,7 @@ const WAIT_STEPS = new Set(['Waiting for batch', 'In batch job', 'Validation que
 const COLS = [
   { k: 'idx', l: '#', a: 'is-r', sl: 'input order' }, { k: 'name', l: 'Company', a: '', sl: 'company' },
   { k: 'verdict', l: 'Status', a: '', sl: 'verdict' }, { k: 'conf', l: 'Confidence', s: 'Conf.', a: 'is-r', sl: 'confidence' },
-  { k: 'crit', l: 'Criteria', a: 'is-r' }, { k: 'patents', l: 'Patents', s: 'Pat.', a: 'is-r', sl: 'patents' },
+  { k: 'crit', l: 'Criteria', s: 'Crit.', a: 'is-r' }, { k: 'patents', l: 'Patents', s: 'Pat.', a: 'is-r', sl: 'patents' },
 ];
 const n = (x) => x.toLocaleString('en-US');
 
@@ -30,12 +30,12 @@ let shown = null;
 function headHtml() {
   return '<thead><tr>' + COLS.map((c) => {
     const cls = 'wb-w-' + c.k + ' wb-c-' + c.k;
-    if (c.k === 'crit') return '<th class="' + cls + '" title="Criteria met: innovation, scientific foundation, proprietary IP"><span class="wb-th is-r is-static">' + c.l + '</span></th>';
+    const s = c.s || c.l; const t = c.t || s;
+    const lbl = s === c.l && t === c.l ? c.l : '<span class="wb-th-l">' + c.l + '</span><span class="wb-th-s">' + s + '</span><span class="wb-th-t">' + t + '</span>';
+    if (c.k === 'crit') return '<th class="' + cls + '" title="Criteria met: innovation, scientific foundation, proprietary IP"><span class="wb-th is-r is-static">' + lbl + '</span></th>';
     const active = S.sortKey === c.k;
     const ar = active ? (S.sortDir > 0 ? '▲' : '▼') : '';
     const aria = active ? (S.sortDir > 0 ? 'ascending' : 'descending') : 'none';
-    const s = c.s || c.l; const t = c.t || s;
-    const lbl = s === c.l && t === c.l ? c.l : '<span class="wb-th-l">' + c.l + '</span><span class="wb-th-s">' + s + '</span><span class="wb-th-t">' + t + '</span>';
     const label = c.sl;
     return '<th class="' + cls + '" aria-sort="' + aria + '"><button class="wb-th ' + c.a + '" data-act="sort" data-k="' + c.k + '" data-fk="sort-' + c.k + '" aria-label="Sort by ' + label + '" title="Sort by ' + label + '">' + lbl + '<span class="wb-th-ar" aria-hidden="true">' + ar + '</span></button></th>';
   }).join('') + '</tr></thead>';

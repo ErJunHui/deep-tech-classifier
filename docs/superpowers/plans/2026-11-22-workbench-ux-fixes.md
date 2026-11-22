@@ -30,12 +30,12 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 | 7 | The quick Settings popover enables Patent lookup with no warning when the EPO keys are missing | Settings popover | **Batch 2**, Task 5 |
 | 8 | Messages say "Ask your admin to add …", but this is a one-person local app. They also say to reload, but the server reads `.env` only at startup | `startProblem`, `render/analyst.js` | **Batch 2**, Task 6 |
 | 9 | Unusable below about 900px: the three columns never collapse | `styles.css` grid | Later |
-| 10 | At 1024px the filter chips clip, the Criteria and Pat. columns disappear, and the Ctrl K hint clips | `styles.css` | Later |
-| 11 | "Also in your file …" prints every unused column name in one long paragraph | `render/setup.js` | Later |
-| 12 | The table moves down about 30px when a search or filter turns on the "Showing N of M" line | Tools row | Later |
-| 13 | Every command menu row carries an "ACTION" label | `render/modal.js` | Later |
-| 14 | The Reasoning text in the evidence panel is larger than every other section | `styles.css` detail | Later |
-| 15 | The empty New run screen shows placeholder rows that read as "loading", and one overlaps the upload icon | `render/setup.js` | Later |
+| 10 | At 1024px the filter chips clip, the Criteria and Pat. columns disappear, and the Ctrl K hint clips | `styles.css` | **Batch 4**, Task 8 |
+| 11 | "Also in your file …" prints every unused column name in one long paragraph | `render/setup.js` | **Batch 4**, Task 10 |
+| 12 | The table moves down about 30px when a search or filter turns on the "Showing N of M" line | Tools row | **Batch 4**, Task 9 |
+| 13 | Every command menu row carries an "ACTION" label | `render/modal.js` | **Batch 4**, Task 13 |
+| 14 | The Reasoning text in the evidence panel is larger than every other section | `styles.css` detail | **Batch 4**, Task 11 |
+| 15 | The empty New run screen shows placeholder rows that read as "loading", and one overlaps the upload icon | `render/setup.js` | **Batch 4**, Task 12 |
 
 Design suggestions from the same review, not yet scheduled:
 - Open and close the command menu and shortcuts sheet instantly, because they are opened from the keyboard.
@@ -119,9 +119,41 @@ The server loads `.env` once, in `serve.py`, and `/api/setup` reads `os.environ`
 
 Not changed: the estimate note says "one company at a time" when not batching, but per-company steps run on `DEFAULT_WORKERS` workers. This is worth rewording in the copy batch.
 
+## Task 8 (#10): Nothing clips at 1024px
+
+**Files:** `web/styles.css`, `web/js/render/table.js`, `web/js/render/rail.js`
+
+- [x] Below 1100px the evidence panel is 330px (was 340), so the table is 534px wide at 1024. Criteria and Patents now show from a 520px table (were 560 and 620), with compact widths (Status 156, Conf. 56, Crit. 52, Pat. 52) and a short "Crit." header.
+- [x] When the main column is under 640px, the filter chips fold behind the Filters button, as they already did under 520px. Open, they take a row of their own and each group wraps.
+- [x] Below 1300px the rail's "Command menu" button reads "Commands", so the Ctrl K hint fits.
+- [x] Browser check at 1024: Crit. and Pat. show, no chip clips, and the rail button fits.
+
+## Task 9 (#12): The table stays put when a filter turns on
+
+**Files:** `web/index.html`, `web/js/render/chips.js`, `web/styles.css`
+
+- [x] The count line ("4 rows" or "Showing 1 of 4 · Clear filters") moved out of the chips into its own full-width row (`data-r="tools-r"`, 26px minimum), so a wider line never re-wraps the chips. The confidence-bin chip moved into that line too. The search box aligns with the first chip row.
+- [x] Browser check: the table top does not move at 1440 (chip, bin) or at 1024 (open filters, chip, clear, search).
+
+## Task 10 (#11): The extra-columns note stays short
+
+- [x] `model.extraColumnsShort(extra, max)` names the first 3 columns and counts the rest (never "and 1 more"). The note reads "27 more columns in your file, kept unchanged in your output: A, B, C and 24 more." The full list is in the tooltip.
+
+## Task 11 (#14): Reasoning at body size
+
+- [x] Reasoning uses `.wb-body` (14px) like every other section. `.wb-lead` is gone.
+
+## Task 12 (#15): No placeholder rows before a file is loaded
+
+- [x] The empty New run screen shows only the column headers and the drop target. `.wb-ghost-bar` is gone.
+
+## Task 13 (#13): Command menu groups get headings
+
+- [x] `model.paletteHeading(items, i)` gives "Actions", "Runs" or "Companies" where a group starts. Rows no longer carry the group label, and search still matches the group name.
+
 ## Next batches (proposed order)
 
 1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
 2. ~~Estimate correctness: #3.~~ Done in Batch 3.
-3. Layout: #10, #12, #11, #14, #15 and #13.
+3. ~~Layout: #10, #12, #11, #14, #15 and #13.~~ Done in Batch 4.
 4. Small screens: #9.

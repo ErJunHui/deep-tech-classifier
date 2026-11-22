@@ -39,7 +39,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench { --wb-rail: 200px; --wb-detail: 480px; position: relative; display: grid; grid-template-columns: var(--wb-rail) minmax(0, 1fr) min(var(--wb-detail), calc((100% - var(--wb-rail)) * 0.6)); height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 13px/1.4 var(--font); }
 @media (min-width: 1600px) { .v-workbench { --wb-detail: 540px; } }
 @media (max-width: 1299px) { .v-workbench { --wb-rail: 176px; --wb-detail: 380px; } }
-@media (max-width: 1099px) { .v-workbench { --wb-rail: 160px; --wb-detail: 340px; } }
+@media (max-width: 1099px) { .v-workbench { --wb-rail: 160px; --wb-detail: 330px; } }
 .v-workbench.is-reading { grid-template-columns: var(--wb-rail) minmax(0, 1fr) calc((100% - var(--wb-rail)) * 0.65); }
 .v-workbench.is-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
 .v-workbench .wb-num { font-variant-numeric: tabular-nums; }
@@ -92,6 +92,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-keymiss { color: var(--escalate); }
 .v-workbench .wb-foot-btns { display: flex; flex-direction: column; gap: 4px; margin-top: 10px; }
 .v-workbench .wb-foot-btns .wb-btn { justify-content: space-between; width: 100%; }
+.v-workbench .wb-foot-s { display: none; }
+@media (max-width: 1299px) { .v-workbench .wb-foot-l { display: none; } .v-workbench .wb-foot-s { display: inline; } }
 
 /* Main column */
 .v-workbench .wb-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container: wbmain / inline-size; }
@@ -142,7 +144,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-sw { display: inline-block; width: 7px; height: 7px; border-radius: 1px; margin-right: 3px; }
 
 /* Toolbar */
-.v-workbench .wb-tools { display: flex; align-items: center; gap: 8px 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
+.v-workbench .wb-tools { display: flex; align-items: flex-start; gap: 8px 10px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--bg); flex-wrap: wrap; }
 .v-workbench .wb-tools[hidden] { display: none; }
 .v-workbench .wb-search { position: relative; flex: 0 1 220px; min-width: 150px; }
 .v-workbench .wb-search input { width: 100%; height: 28px; padding: 0 28px 0 9px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface); font-size: 13px; }
@@ -154,10 +156,18 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-chip:hover { border-color: var(--border-strong); color: var(--text); }
 .v-workbench .wb-chip[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--surface); }
 .v-workbench .wb-chip-n { font-variant-numeric: tabular-nums; opacity: 0.7; }
-.v-workbench .wb-tools-r { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); white-space: nowrap; margin-left: auto; }
+.v-workbench .wb-tools-r { display: flex; flex: 1 0 100%; justify-content: flex-end; align-items: center; gap: 8px; min-height: 26px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+/* A narrow main column folds the chips behind the Filters button; they open as a row of their own. */
+@container wbmain (max-width: 639px) {
+  .v-workbench .wb-filt-tg { display: inline-flex; }
+  .v-workbench .wb-chips { display: none; }
+  .v-workbench .wb-tools.is-open .wb-chips { display: flex; flex-basis: 100%; }
+  .v-workbench .wb-chipgrp { flex-wrap: wrap; }
+  .v-workbench .wb-search { flex: 1 1 140px; }
+}
 
 /* Table. Column sets follow the table's own width (container queries):
-   <500 list | 500 compact | 560 +criteria | 620 +patents | 800 roomy | 960 wide.
+   <500 list | 500 compact | 520 +criteria and patents | 800 roomy | 960 wide.
    Reading view always uses the list set. Widths include cell padding.
    Quiet by design: sentence-case headers, no row rules, colour only on rows
    that still need a decision (Status) or fall below the threshold (Conf.). */
@@ -180,17 +190,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-table .is-c { text-align: center; }
 .v-workbench .wb-table td.wb-idx { color: var(--text-3); font-size: 12px; }
 .v-workbench .wb-w-idx { width: 28px; } .v-workbench .wb-w-verdict { width: 76px; } .v-workbench .wb-w-conf { width: 56px; }
-.v-workbench .wb-w-crit { width: 64px; } .v-workbench .wb-w-patents { width: 56px; }
+.v-workbench .wb-w-crit { width: 52px; } .v-workbench .wb-w-patents { width: 52px; }
 .v-workbench .wb-table .wb-c-crit, .v-workbench .wb-table .wb-c-patents { display: none; }
 .v-workbench .wb-table .wb-st-v, .v-workbench .wb-table .wb-st-q, .v-workbench .wb-table .wb-st-note, .v-workbench .wb-table .wb-co-d, .v-workbench .wb-table .wb-th-l, .v-workbench .wb-table .wb-th-s { display: none; }
 .v-workbench .wb-table .wb-th-t, .v-workbench .wb-table .wb-st-s { display: inline; }
 @container wbtable (min-width: 500px) {
-  .v-workbench .wb-w-verdict { width: 168px; } .v-workbench .wb-w-conf { width: 64px; }
+  .v-workbench .wb-w-verdict { width: 156px; } .v-workbench .wb-w-conf { width: 56px; }
   .v-workbench .wb-table .wb-st-v, .v-workbench .wb-table .wb-st-q, .v-workbench .wb-table .wb-st-note { display: inline; }
   .v-workbench .wb-table .wb-st-s, .v-workbench .wb-table .wb-th-t { display: none; } .v-workbench .wb-table .wb-th-s { display: inline; }
 }
-@container wbtable (min-width: 560px) { .v-workbench .wb-table .wb-c-crit { display: table-cell; } }
-@container wbtable (min-width: 620px) { .v-workbench .wb-table .wb-c-patents { display: table-cell; } }
+@container wbtable (min-width: 520px) { .v-workbench .wb-table .wb-c-crit, .v-workbench .wb-table .wb-c-patents { display: table-cell; } }
 @container wbtable (min-width: 800px) {
   .v-workbench .wb-table td { padding: 0 10px; } .v-workbench .wb-th { padding: 0 10px; }
   .v-workbench .wb-w-idx { width: 40px; } .v-workbench .wb-w-verdict { width: 200px; } .v-workbench .wb-w-conf { width: 104px; }
@@ -288,8 +297,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-divider:focus-visible { outline: none; }
 .v-workbench.is-reading .wb-divider { display: none; }
 .v-workbench .wb-detail { flex: 1; min-width: 0; border-left: 1px solid var(--border); background: var(--surface); overflow-y: auto; container: wbdetail / inline-size; }
-/* Evidence panel. Type scale: 12 meta, 13 UI and headings, 14 body, 15 lead
-   and verdict, 17 title. Colour only marks what still needs a decision. */
+/* Evidence panel. Type scale: 12 meta, 13 UI and headings, 14 body (every
+   section's text), 15 verdict, 17 title. Colour only marks what still needs a decision. */
 .v-workbench .wb-d { padding-bottom: 96px; }
 .v-workbench .wb-d-top { position: sticky; top: 0; z-index: 3; background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px 14px; }
 .v-workbench .wb-d-row1 { display: flex; align-items: flex-start; gap: 12px; }
@@ -337,7 +346,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-sec.is-closed .wb-chev { transform: rotate(-90deg); }
 .v-workbench .wb-sec.is-closed .wb-sec-btn { color: var(--text-2); }
 .v-workbench .wb-sec-aside { font-size: 12px; font-weight: 400; color: var(--text-3); text-align: right; }
-.v-workbench .wb-lead { font-size: 15px; line-height: 1.6; color: var(--text); }
 .v-workbench .wb-body { font-size: 14px; line-height: 1.6; color: var(--text); }
 .v-workbench .wb-body.wb-muted { color: var(--text-3); }
 .v-workbench .wb-crit { padding: 10px 0; }
@@ -440,7 +448,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-cell-miss { color: var(--escalate); font-style: italic; }
 .v-workbench .wb-cell-empty { color: var(--text-3); font-style: italic; }
 .v-workbench .wb-table.is-setup tr.is-enter { animation: workbench-land 200ms var(--ease-out) both; animation-delay: calc(var(--i) * 12ms); }
-.v-workbench .wb-ghost-bar { display: block; height: 8px; border-radius: 4px; background: var(--surface-2); }
 .v-workbench .wb-sempty { position: absolute; inset: 36px 0 0; display: grid; place-items: center; padding: 24px 24px 176px; text-align: center; }
 .v-workbench .wb-sempty-in { max-width: 440px; padding: 18px 20px; border-radius: var(--radius-l); background: var(--surface); }
 .v-workbench .wb-sempty-ic { display: grid; place-items: center; width: 44px; height: 44px; margin: 0 auto 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); }
@@ -549,9 +556,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .v-workbench .wb-modal.is-help { width: min(700px, calc(100% - 32px)); }
 .v-workbench .wb-pal-in { flex: none; height: 46px; border: 0; border-bottom: 1px solid var(--border); padding: 0 16px; font-size: 15px; background: transparent; outline: none; }
 .v-workbench .wb-pal-list { list-style: none; padding: 6px; overflow-y: auto; flex: 1; }
-.v-workbench .wb-pal-it { display: grid; grid-template-columns: 70px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 10px; border-radius: var(--radius-s); cursor: pointer; font-size: 13px; }
+.v-workbench .wb-pal-it { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 10px; border-radius: var(--radius-s); cursor: pointer; font-size: 13px; }
 .v-workbench .wb-pal-it[aria-selected="true"] { background: var(--accent-soft); }
-.v-workbench .wb-pal-g { font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.v-workbench .wb-pal-h { padding: 8px 10px 3px; font-size: 11px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.v-workbench .wb-pal-h:first-child { padding-top: 2px; }
 .v-workbench .wb-pal-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v-workbench .wb-pal-l small { color: var(--text-3); margin-left: 6px; font-size: 12px; }
 .v-workbench .wb-pal-keys { display: inline-flex; gap: 3px; }

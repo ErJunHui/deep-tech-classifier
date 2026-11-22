@@ -484,6 +484,12 @@ export function extraColumns(headers, mapping) {
   const used = Object.values(mapping).filter(Boolean);
   return headers.filter((h) => used.indexOf(h) < 0);
 }
+/* The extra columns to name in the setup note: the first max, and how many
+   more. "and 1 more" is never said, as naming that one is just as short. */
+export function extraColumnsShort(extra, max) {
+  if (extra.length <= max + 1) return { shown: extra.slice(), more: 0 };
+  return { shown: extra.slice(0, max), more: extra.length - max };
+}
 /* The warning when no description column is mapped; '' when one is. */
 export function noDescriptionNote(cfg) {
   if (cfg.mapping.description) return '';
@@ -533,6 +539,13 @@ export function pinUnpriced(model, pricedModels) {
 }
 
 /* ---------- command menu ---------- */
+/* The command menu's heading above items[i] when a group starts there, else
+   null. Rows no longer carry their group name. */
+const PAL_HEADS = { Action: 'Actions', Run: 'Runs', Company: 'Companies' };
+export function paletteHeading(items, i) {
+  if (i > 0 && items[i - 1].g === items[i].g) return null;
+  return PAL_HEADS[items[i].g] || items[i].g;
+}
 /* The command menu's items for search q, in order: the actions (cmds
    entries with an act and not menu: false; while setting up only those
    marked setup), then "Reset the evidence panel width" (not while setting

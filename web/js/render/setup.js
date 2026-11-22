@@ -10,7 +10,7 @@
    so an answer for it never paints over the run on screen. */
 import {
   esc, clamp, SETUP_FIELDS, mapState, tickAllState, tickedCount, startProblem,
-  classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, noDescriptionNote, cellExample,
+  classifyLabel, estimateNote, unknownCostLine, ESTIMATE_FAILED, extraColumns, extraColumnsShort, noDescriptionNote, cellExample,
   modelFor, isCustom, visibleRows, fileLine, noBatchText, tierPriceText, cancelHintsEsc, setupRowStatus, quickStepNote, batchSmallRunText,
 } from '../model.js';
 import { S, setupShown } from '../store.js';
@@ -97,7 +97,12 @@ function headHtml() {
     const desc = noDescriptionNote(d);
     if (desc) notes.push('<p class="wb-snote is-warn">' + esc(desc) + '</p>');
     const extra = extraColumns(f.headers, d.mapping);
-    if (extra.length) notes.push('<p class="wb-snote">Also in your file and kept unchanged in your output: <b>' + esc(extra.join(', ')) + '</b>.</p>');
+    if (extra.length) {
+      // A long list is cut to a few names and a count; the full list is in the tooltip.
+      const x = extraColumnsShort(extra, 3);
+      const names = '<b>' + esc(x.shown.join(', ')) + '</b>' + (x.more ? ' and ' + x.more + ' more' : '');
+      notes.push('<p class="wb-snote"' + (x.more ? ' title="' + esc(extra.join(', ')) + '"' : '') + '>' + (extra.length === 1 ? 'One more column' : extra.length + ' more columns') + ' in your file, kept unchanged in your output: ' + names + '.</p>');
+    }
   }
   return h + (notes.length ? '<div class="wb-snotes">' + notes.join('') + '</div>' : '');
 }
@@ -165,7 +170,7 @@ export function renderSetupTable(opts) {
     '<th scope="col" class="wb-s-chk wb-chk">' + chk + '</th><th scope="col" class="wb-s-idx is-r"><div class="wb-sth is-r">#</div></th>' +
     SETUP_FIELDS.map(thHtml).join('') + '<th scope="col" class="wb-s-status is-out-col"><div class="wb-sth">Status</div></th></tr></thead><tbody>';
   if (!f) {
-    for (let i = 0; i < 7; i++) h += '<tr class="wb-ghost" aria-hidden="true"><td></td><td></td>' + [62, 48, 40, 78, 34].map((w) => '<td><span class="wb-ghost-bar" style="width:' + (w - i * 4) + '%"></span></td>').join('') + '</tr>';
+    // Only the headers: placeholder rows read as loading.
     put(wrap, h + '</tbody></table>' + emptyHtml());
     return;
   }
