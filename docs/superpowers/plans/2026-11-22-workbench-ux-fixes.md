@@ -40,8 +40,8 @@ Status: **Batch 1** means this plan fixes it now, **Later** means it is not yet 
 Design suggestions from the same review:
 - ~~Open and close the command menu and shortcuts sheet instantly, because they are opened from the keyboard.~~ Done in Batch 6, Task 15.
 - ~~Under `prefers-reduced-motion`, keep opacity transitions and remove only movement.~~ Done in Batch 6, Task 16.
-- Use transitions rather than one-shot keyframes for the Analyst sheet, so it can be interrupted.
-- Make "Same settings…" offer the same file first.
+- Use transitions rather than one-shot keyframes for the Analyst sheet, so it can be interrupted. Batch 7, Task 18.
+- Make "Same settings…" offer the same file first. Batch 7, Task 19.
 
 ---
 
@@ -203,6 +203,31 @@ A run that doesn't batch processes `concurrency.workers` companies at once (8 by
 
 - [x] Follow-up: the time estimate uses the same count. `estimate()` and `estimate_request()` take `workers`, `/api/estimate` passes `workers_from(base config)`, and the README no longer says the estimate assumes 8. Tests: fewer workers take proportionally longer (EPO excluded), more workers never beat the EPO floor, and `/api/estimate` uses a project's `concurrency.workers`.
 
+## Task 18: The Analyst sheet can be interrupted
+
+**Files:** `web/js/render/analyst.js`, `web/styles.css`
+
+The sheet and its scrim open with the one-shot keyframes `workbench-slide` and `workbench-fade`. Closing swaps in `workbench-slide-out` and `workbench-out`, and a 170ms timer then empties the overlay. Two problems follow. Closing during the open jumps the sheet to full opacity before it fades out. Reopening during the close rebuilds the overlay, so the sheet jumps back to its start position.
+
+Rule: the sheet and scrim use transitions toward an `is-open` class. Opening adds the class one frame after the elements are inserted. Closing removes it. Reopening while a close is still running reuses the leaving elements: it cancels the timer and adds `is-open` again, so the sheet turns around from where it is. Durations stay the same: 240ms to open and 160ms to close for the sheet, 200ms and 160ms for the scrim. Under reduced motion the global rule keeps only `opacity`, so the sheet fades without moving.
+
+- [ ] **Step 1:** In `styles.css`, give `.wb-sheet` and `.wb-scrim` their closed state (opacity 0, the sheet at `translateX(16px)`) and their `transition`, with the open state under `.is-open`. Remove `.is-leaving`, along with `workbench-slide`, `workbench-slide-out` and their reduced-motion copies once nothing uses them.
+- [ ] **Step 2:** In `analyst.js`, `openAnalyst` reuses a leaving sheet or inserts a new one and adds `is-open` after a forced reflow. `closeAnalyst` removes `is-open` and empties the overlay after the close transition.
+- [ ] **Step 3:** Run the tests. In the browser: opening slides in. Clicking Done halfway through the open slides back from the current position with no jump. Reopening during the close turns the sheet around without rebuilding it, and focus and the body content are still right. With reduced motion emulated, only opacity changes.
+
+## Task 19: "Same settings…" offers the same file first
+
+**Files:** `webapp/app.py`, `web/js/api.js`, `web/js/model.js`, `web/js/setup.js`, `web/js/events.js`, `web/js/render/setup.js`, `tests/test_webapp/test_api.py`, `web/tests/model.test.js`
+
+A "Same settings…" draft starts with no file, although the user usually wants to run the same companies again. Every run keeps a copy of its input in `runs/<id>/input/<file>`, which holds only the rows that were ticked.
+
+Rule: while a "Same settings…" draft has no file, the drop target's primary button is **Use <file> again**, and **Choose file…** becomes a secondary button next to it. Setup focuses the primary button. Clicking it copies the run's input into a new upload, and from then on it behaves exactly like an upload, with the mapping kept by `mappingForFile`. If the input is gone, the error appears under the buttons and Choose file still works. After **Change file** the offer comes back.
+
+- [ ] **Step 1:** Tests. Python: `POST /api/runs/{id}/file` returns an upload (`fileId`, `name`, `rows`) of the run's input, with the run's rows only. It answers 404 for an unknown run and for a run whose input is missing, and the new `fileId` can start a run. Node: `reuseOffer(draft)` returns `{ name, runId }` for a "Same settings…" draft with no file that is not reading, and `null` otherwise.
+- [ ] **Step 2:** Run them and confirm they fail.
+- [ ] **Step 3:** Add the route (it reads the bytes and calls `files.save_upload`), `api.reuseRunFile`, `fromFile` on `newDraft`, `reuseOffer`, `reuseFile()` in `setup.js` (sharing `loadFile`'s upload handling), the `reuse-file` action, and the buttons and focus in `render/setup.js`.
+- [ ] **Step 4:** Run the tests. In the browser, on the saved run: Same settings… shows "Use companies.xlsx again" focused. Clicking it loads the rows with the run's mapping. Change file brings the offer back. Choose file still works.
+
 ## Next batches (proposed order)
 
 1. ~~Copy and states: #5, #6, #8 and #7.~~ Done in Batch 2.
@@ -210,3 +235,4 @@ A run that doesn't batch processes `concurrency.workers` companies at once (8 by
 3. ~~Layout: #10, #12, #11, #14, #15 and #13.~~ Done in Batch 4.
 4. ~~Small screens: #9.~~ Done in Batch 5.
 5. ~~Motion and copy: keyboard modals, reduced motion, worker count.~~ Done in Batch 6.
+6. Batch 7: the Analyst sheet can be interrupted (Task 18), and Same settings offers the same file (Task 19).
